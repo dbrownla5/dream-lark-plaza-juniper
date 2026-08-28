@@ -6,6 +6,7 @@ import { WORKFLOW_CHAINS } from "./workflows.ts";
 import { ensureWorkspace, dailySpendCents, spendCeiling } from "./workspace.ts";
 import { listContext, writeContext, correctContext, createArtifact, refineArtifact } from "./context.ts";
 import { listTasks, createTask, runOccupation, decideApproval, startChain, resumeTask, driveWorkflow, listWorkflowPaths } from "./runtime.ts";
+import { enqueueJob, listJobs } from "./queue.ts";
 import { listBatches, listAssets, ingestPhotoBatch } from "./photo.ts";
 import { listDocuments, ingestDocument } from "./documents.ts";
 import { zoneCensus } from "./storage.ts";
@@ -42,6 +43,7 @@ export const loadHome = createServerFn({ method: "GET" })
     ]);
     const waiting = tasks.filter((t) => t.status === "waiting_approval" || t.status === "blocked");
     const active = tasks.filter((t) => t.status === "running" || t.status === "queued" || t.status === "handed_off");
+    const done = tasks.filter((t) => t.status === "done" || t.status === "handed_off").slice(0, 6);
     return {
       userId: context.userId,
       llm: llmAvailable() ? LLM_MODEL : "UNAVAILABLE",
@@ -50,6 +52,7 @@ export const loadHome = createServerFn({ method: "GET" })
       ceiling,
       waiting,
       active,
+      done,
       approvals,
       batches,
       documents,
@@ -95,7 +98,15 @@ export const loadWork = createServerFn({ method: "GET" })
     const sql = await getSql();
     const tasks = await listTasks(sql, context.userId);
     const paths = await listWorkflowPaths(sql, context.userId);
-    return { tasks, paths, chains: WORKFLOW_CHAINS };
+    const approvals = await sql.query<{
+      id: string; task_id: string | null; action_kind: string; consequence: string; status: string; created_at: string;
+    }>(
+      `select id, task_id, action_kind, consequence, status, created_at::text as created_at
+       from approvals where user_id = $1 order by created_at desc limit 20`,
+      [context.userId],
+    );
+    const outputs = tasks.filter((t) => t.status === "done" || t.status === "handed_off");
+    return { tasks, paths, chains: WORKFLOW_CHAINS, approvals, outputs };
   });
 
 export const loadMedia = createServerFn({ method: "GET" })
@@ -199,6 +210,7 @@ export const loadSystem = createServerFn({ method: "GET" })
     const ceiling = await spendCeiling(sql, context.userId);
     const zones = await zoneCensus(sql, context.userId);
     const paths = await listWorkflowPaths(sql, context.userId);
+    const jobs = await listJobs(sql, context.userId, 12);
     return {
       health: health[0] ?? null,
       llm: llmAvailable() ? LLM_MODEL : "UNAVAILABLE",
@@ -210,6 +222,7 @@ export const loadSystem = createServerFn({ method: "GET" })
       status: "PARTIAL",
       zones,
       paths,
+      jobs,
     };
   });
 
@@ -325,8 +338,12 @@ export const postStartChain = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     const started = await startChain(sql, { userId: context.userId, ...data });
-    const driven = await driveWorkflow(sql, context.userId, started.workflowId);
-    return { ...started, driven };
+    const job = await enqueueJob(sql, {
+      userId: context.userId,
+      kind: "drive_workflow",
+      payload: { workflowId: started.workflowId },
+    });
+    return { ...started, jobId: job.id };
   });
 
 export const postDriveWorkflow = createServerFn({ method: "POST" })

@@ -59,6 +59,30 @@ function Home() {
             )}
           </Panel>
           <Panel
+            title="Last outputs"
+            action={
+              <Link to="/work" className="text-sm text-primary">
+                Work
+              </Link>
+            }
+          >
+            {q.data.done.length === 0 ? (
+              <Empty>No occupation has finished yet. Put work on a desk under Occupations.</Empty>
+            ) : (
+              <ul className="space-y-3 text-sm">
+                {q.data.done.map((t) => (
+                  <li key={t.id} className="rounded-md border border-border p-3">
+                    <div className="flex justify-between gap-2">
+                      <span>{roleName(t.role_id)}</span>
+                      <Status value={t.status} />
+                    </div>
+                    {t.interpretation ? <p className="mt-2">{t.interpretation}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+          <Panel
             title="Memory"
             action={
               <Link to="/context" className="text-sm text-primary">

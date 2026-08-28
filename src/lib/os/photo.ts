@@ -2,9 +2,11 @@ import type { Sql } from "@/lib/db";
 import { newId, sha256Hex } from "./ids.ts";
 import { putDerivative, ingestOriginal } from "./storage.ts";
 import { invokeVision, llmAvailable } from "./llm.ts";
-import { startChain, driveWorkflow } from "./runtime.ts";
+import { startChain } from "./runtime.ts";
 import { writeContext } from "./context.ts";
 import { audit } from "./workspace.ts";
+import { createWorkPackage } from "./package.ts";
+import { enqueueJob } from "./queue.ts";
 
 export type MediaAssetRow = {
   id: string;
@@ -218,6 +220,18 @@ export async function ingestPhotoBatch(
   let workflowId: string | null = null;
   const looksResale = (opts.purpose ?? "").toLowerCase().includes("resale") || opts.sourceType === "resale";
   const chainId = looksResale ? "resale" : "media";
+  const pkg = await createWorkPackage(sql, {
+    userId: opts.userId,
+    title: `Media batch ${batchId}`,
+    objective: looksResale
+      ? "Preserve originals then identify, condition, price, and list as separate occupations."
+      : "Preserve originals. Derivatives must link back. Do not alter the original.",
+    payload: {
+      mediaBatchId: batchId,
+      blobId: originalIds[0] ?? null,
+      filename: opts.files[0]?.filename ?? null,
+    },
+  });
   const wf = await startChain(sql, {
     userId: opts.userId,
     chainId,
@@ -226,9 +240,15 @@ export async function ingestPhotoBatch(
       : `Media custody for batch ${batchId}`,
     subjectId: batchId,
     isTestOnly: opts.isTestOnly,
+    packageId: pkg.id,
+    input: { batchId, originalIds, assetCount: assets.length },
   });
   workflowId = wf.workflowId;
-  await driveWorkflow(sql, opts.userId, wf.workflowId);
+  await enqueueJob(sql, {
+    userId: opts.userId,
+    kind: "drive_workflow",
+    payload: { workflowId, batchId },
+  });
   if (looksResale) {
     await sql.query(
       `insert into resale_items (id, user_id, batch_id, title, status)

@@ -80,6 +80,17 @@ function AgentsPage() {
                     {run.data?.blockedReason ? (
                       <p className="text-sm text-review">{run.data.blockedReason}</p>
                     ) : null}
+                    {run.data?.task && open === r.id ? (
+                      <div className="mt-2 rounded-md border border-border p-2 text-sm">
+                        <Status value={run.data.task.status} />
+                        {run.data.task.interpretation ? (
+                          <p className="mt-2">{run.data.task.interpretation}</p>
+                        ) : null}
+                        {run.data.task.output_json ? (
+                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs">{run.data.task.output_json}</pre>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </Panel>

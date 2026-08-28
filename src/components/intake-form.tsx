@@ -1,37 +1,66 @@
 import { getBearerToken } from "@/lib/auth/client";
 import { useState, type FormEvent } from "react";
 
+type IntakeJson = {
+  ok?: boolean;
+  error?: string;
+  words?: {
+    listened?: boolean;
+    taskId?: string;
+    status?: string;
+    blockedReason?: string | null;
+    interpretation?: string | null;
+    output?: string | null;
+  };
+  photos?: { batchId?: string; originalsPreserved?: boolean; assets?: unknown[] };
+  documents?: { original_filename?: string; checksum_sha256?: string }[];
+};
+
 export function IntakeForm() {
   const [notice, setNotice] = useState<string | null>(null);
+  const [output, setOutput] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
-    const token = getBearerToken();
-    if (!token) return; // native POST + cookie session
     e.preventDefault();
     setBusy(true);
     setNotice(null);
+    setOutput(null);
     try {
       const form = e.currentTarget;
       const fd = new FormData(form);
-      const res = await fetch("/api/intake", {
-        method: "POST",
-        body: fd,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-        },
-      });
-      const json = (await res.json()) as { ok?: boolean; error?: string; photos?: { batchId: string } };
-      if (!res.ok) {
-        setNotice(json.error || `Intake failed (${res.status})`);
+      const headers: Record<string, string> = { Accept: "application/json" };
+      const token = getBearerToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch("/api/intake", { method: "POST", body: fd, headers });
+      const json = (await res.json()) as IntakeJson;
+      if (!res.ok || json.ok === false) {
+        setNotice(json.error || `Bring-in failed (${res.status})`);
         return;
       }
-      setNotice("Kept. Your words are sealed. Files, if any, are preserved on the server.");
+      const bits: string[] = [];
+      if (json.words?.listened) bits.push("Your words are sealed. No occupation was started.");
+      if (json.words?.taskId) {
+        bits.push(`Occupation ${json.words.status ?? "ran"}.`);
+        if (json.words.blockedReason) bits.push(json.words.blockedReason);
+        if (json.words.interpretation) setOutput(json.words.interpretation);
+        else if (json.words.output) setOutput(json.words.output);
+      }
+      if (json.photos?.batchId) {
+        bits.push(
+          `Photos preserved${json.photos.originalsPreserved ? ", originals write-once" : ""}.`,
+        );
+      }
+      if (json.documents?.length) {
+        const first = json.documents[0];
+        bits.push(
+          `${json.documents.length} document(s) preserved on the server. Occupations queued.`,
+        );
+      }
+      setNotice(bits.join(" ") || "Kept.");
       form.reset();
-      if (json.photos?.batchId) window.location.assign("/media");
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Intake failed");
+      setNotice(err instanceof Error ? err.message : "Bring-in failed");
     } finally {
       setBusy(false);
     }
@@ -64,8 +93,7 @@ export function IntakeForm() {
         Files and photos
       </label>
       <p className="mt-1 text-sm text-muted">
-        Originals are written once, checksummed, and kept. Drag-and-drop is one intake path — the same
-        pipeline accepts the API.
+        Originals are written once, checksummed, and kept.
       </p>
       <input
         id="files"
@@ -82,9 +110,13 @@ export function IntakeForm() {
         >
           {busy ? "Preserving…" : "Bring in"}
         </button>
-        <p className="text-xs text-muted">Native form POST — does not depend on a scripted button.</p>
       </div>
-      {notice ? <p className="mt-3 text-sm text-review">{notice}</p> : null}
+      {notice ? <p className="mt-3 text-sm text-ok">{notice}</p> : null}
+      {output ? (
+        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-md border border-border bg-bg p-3 text-sm">
+          {output}
+        </pre>
+      ) : null}
     </form>
   );
 }

@@ -46,3 +46,13 @@ test("paraphrased sale guarantee is refused", () => {
   );
   assert.equal(d.ok, false);
 });
+
+test("restating a prohibition in output is not a block", () => {
+  const d = assertProhibitedSpeech(34, "I will not strip evidence from the original.", "output");
+  assert.equal(d.ok, true);
+});
+
+test("asking to strip evidence is blocked", () => {
+  const d = assertProhibitedSpeech(34, "strip evidence from this batch", "request");
+  assert.equal(d.ok, false);
+});

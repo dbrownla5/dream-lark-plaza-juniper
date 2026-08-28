@@ -33,6 +33,7 @@ export async function invokeLlm(opts: {
   system: string;
   user: string;
   maxTokens?: number;
+  json?: boolean;
 }): Promise<LlmResult> {
   const apiKey = process.env.XAI_API_KEY?.trim();
   if (!apiKey) {
@@ -46,21 +47,25 @@ export async function invokeLlm(opts: {
   const system = redactSecrets(opts.system);
   const user = redactSecrets(opts.user);
   try {
+    const body: Record<string, unknown> = {
+      model: LLM_MODEL,
+      max_tokens: opts.maxTokens ?? 900,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    };
+    if (opts.json) {
+      body.response_format = { type: "json_object" };
+    }
     const res = await fetch(`${LLM_BASE}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model: LLM_MODEL,
-        max_tokens: opts.maxTokens ?? 900,
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

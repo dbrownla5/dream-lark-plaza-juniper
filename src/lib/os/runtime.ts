@@ -13,7 +13,10 @@ import { invokeLlm, llmAvailable, LLM_MODEL } from "./llm.ts";
 import { retrieveForTask, writeContext, listVoicePillars } from "./context.ts";
 import { newId } from "./ids.ts";
 import { audit, dailySpendCents, recordUsage, spendCeiling } from "./workspace.ts";
-import { getChain, nextRequiredStep } from "./workflows.ts";
+import { getChain } from "./workflows.ts";
+import { parseOccupationOutput, type OccupationOutput } from "./structured.ts";
+import { loadPackage, packagePrompt, appendPackageHistory, bindPackageWorkflow, createWorkPackage } from "./package.ts";
+import { putObject } from "./storage.ts";
 
 export type TaskRow = {
   id: string;
@@ -140,6 +143,7 @@ export async function runOccupation(
   const speech = assertProhibitedSpeech(
     role.id,
     `${task.request_statement}\n${opts.extraInstruction ?? ""}`,
+    "request",
   );
   if (!speech.ok) {
     return fail(sql, task, speech.message, rubric, "authority_to_act");
@@ -180,6 +184,9 @@ export async function runOccupation(
       ? await listVoicePillars(sql, opts.userId)
       : [];
   mark(5, true, "user statements retrieved separately from inference");
+
+  const pkg = task.package_id ? await loadPackage(sql, opts.userId, task.package_id) : null;
+  const pkgText = pkg ? packagePrompt(pkg) : "";
 
   // 4 separate words
   const cleaned = sanitizeForAgentContext({
@@ -227,7 +234,7 @@ export async function runOccupation(
     voiceRule,
     `You must keep Dayna's words distinct from your interpretation.`,
     `Never invent identity, facts, or success. If uncertain, say so.`,
-    `Return JSON only with keys: interpretation, output, evidence, uncertainty, handoff_role_id, needs_approval, approval_action, context_note.`,
+    `Return a single JSON object only. No markdown. Keys: interpretation (string), output (object or string), evidence (array of strings), uncertainty (string or null), handoff_role_id (number or null), needs_approval (boolean), approval_action (string or null), context_note (string).`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -236,12 +243,14 @@ export async function runOccupation(
     `Dayna's words (do not rewrite as yours):\n${cleaned.userStatement}`,
     userBits.length ? `Current user statements / corrections:\n${userBits.map((c) => c.body).join("\n")}` : "",
     opts.extraInstruction ? `Additional instruction:\n${opts.extraInstruction}` : "",
+    pkgText,
+    task.input_json ? `Input handed to you from the previous occupation or intake:\n${task.input_json.slice(0, 4000)}` : "",
     `Prior agent inference (not Dayna's voice):\n${cleaned.other || "(none)"}`,
   ]
     .filter(Boolean)
     .join("\n\n");
 
-  const llm = await invokeLlm({ system, user, maxTokens: 900 });
+  const llm = await invokeLlm({ system, user, maxTokens: 1800, json: true });
   await recordUsage(sql, {
     userId: opts.userId,
     kind: "llm",
@@ -251,27 +260,43 @@ export async function runOccupation(
     return fail(sql, task, `${llm.code}: ${llm.error}`, rubric, "no_fabricated_success");
   }
 
-  let parsed: {
-    interpretation?: string;
-    output?: unknown;
-    evidence?: unknown;
-    uncertainty?: string | null;
-    handoff_role_id?: number | null;
-    needs_approval?: boolean;
-    approval_action?: string | null;
-    context_note?: string;
-  };
+  let parsed: OccupationOutput;
   try {
-    const jsonText = extractJson(llm.text);
-    parsed = JSON.parse(jsonText) as typeof parsed;
+    parsed = parseOccupationOutput(llm.text);
   } catch {
-    return fail(sql, task, "STRUCTURED_OUTPUT_INVALID", rubric, "completion_criteria");
+    const repair = await invokeLlm({
+      system:
+        "Return a single JSON object only. No markdown. Keys: interpretation (string), output (object or string), evidence (array of strings), uncertainty (string or null), handoff_role_id (number or null), needs_approval (boolean), approval_action (string or null), context_note (string).",
+      user: `The previous reply was not valid JSON. Repair it into valid JSON with those keys.\n\nPrevious reply:\n${llm.text.slice(0, 3500)}`,
+      maxTokens: 1800,
+      json: true,
+    });
+    await recordUsage(sql, {
+      userId: opts.userId,
+      kind: "llm",
+      costCents: repair.ok ? repair.costCents : 0,
+    });
+    if (!repair.ok) {
+      return fail(sql, task, `STRUCTURED_OUTPUT_INVALID: ${llm.text.slice(0, 180)}`, rubric, "completion_criteria");
+    }
+    try {
+      parsed = parseOccupationOutput(repair.text);
+    } catch {
+      return fail(
+        sql,
+        task,
+        `STRUCTURED_OUTPUT_INVALID: ${repair.text.slice(0, 180)}`,
+        rubric,
+        "completion_criteria",
+      );
+    }
   }
   mark(9, true, "structured output parsed");
 
   const outGate = assertProhibitedSpeech(
     role.id,
     `${parsed.interpretation ?? ""} ${typeof parsed.output === "string" ? parsed.output : JSON.stringify(parsed.output ?? {})}`,
+    "output",
   );
   if (!outGate.ok) {
     return fail(sql, task, outGate.message, rubric, "authority_to_act");
@@ -399,6 +424,34 @@ export async function runOccupation(
     detail: status,
   });
 
+  if ((status === "done" || status === "handed_off") && task.package_id) {
+    await appendPackageHistory(sql, {
+      userId: opts.userId,
+      packageId: task.package_id,
+      roleId: role.id,
+      taskId: task.id,
+      stepName: task.step_name,
+      interpretation,
+      output: parsed.output ?? {},
+    });
+    await putObject(sql, {
+      userId: opts.userId,
+      zone: "outputs",
+      bytes: new Uint8Array(
+        Buffer.from(
+          JSON.stringify({
+            taskId: task.id,
+            roleId: role.id,
+            interpretation,
+            output: parsed.output ?? {},
+          }),
+        ),
+      ),
+      mime: "application/json",
+      originalFilename: `${task.id}.output.json`,
+    });
+  }
+
   const latest = await getTask(sql, opts.userId, task.id);
   if (latest && (latest.status === "done" || latest.status === "handed_off")) {
     await advanceAfterComplete(sql, opts.userId, latest);
@@ -491,15 +544,6 @@ async function handoffPath(sql: Sql, task: TaskRow): Promise<number[]> {
   return path;
 }
 
-function extractJson(text: string): string {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  if (fenced) return fenced[1].trim();
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start >= 0 && end > start) return text.slice(start, end + 1);
-  throw new Error("NO_JSON");
-}
-
 export async function resumeTask(sql: Sql, userId: string, taskId: string, action: ActionClass): Promise<RunResult> {
   const task = await getTask(sql, userId, taskId);
   if (!task) throw new Error("TASK_NOT_FOUND");
@@ -546,7 +590,15 @@ export async function decideApproval(
 
 export async function startChain(
   sql: Sql,
-  opts: { userId: string; chainId: string; requestStatement: string; subjectId?: string; isTestOnly?: boolean },
+  opts: {
+    userId: string;
+    chainId: string;
+    requestStatement: string;
+    subjectId?: string;
+    isTestOnly?: boolean;
+    packageId?: string | null;
+    input?: unknown;
+  },
 ): Promise<{ workflowId: string; firstTask: TaskRow }> {
   const chain = getChain(opts.chainId);
   const workflowId = newId("wf");
@@ -555,6 +607,16 @@ export async function startChain(
      values ($1,$2,$3,'running',0,$4,$5)`,
     [workflowId, opts.userId, chain.id, opts.subjectId ?? null, chain.id],
   );
+  let packageId = opts.packageId ?? null;
+  if (!packageId) {
+    const pkg = await createWorkPackage(sql, {
+      userId: opts.userId,
+      title: chain.title,
+      objective: opts.requestStatement,
+    });
+    packageId = pkg.id;
+  }
+  await bindPackageWorkflow(sql, opts.userId, packageId, workflowId);
   const first = chain.steps[0];
   const firstTask = await createTask(sql, {
     userId: opts.userId,
@@ -563,6 +625,8 @@ export async function startChain(
     requestStatement: opts.requestStatement,
     workflowId,
     stepName: first.name,
+    packageId,
+    input: opts.input ?? { chainId: chain.id, objective: opts.requestStatement },
     isTestOnly: opts.isTestOnly,
   });
   return { workflowId, firstTask };
@@ -629,22 +693,28 @@ export async function listWorkflowPaths(sql: Sql, userId: string): Promise<Workf
   });
 }
 
-/** Create the next required occupation on the chain. Does not run it. */
+/** Create the next occupation on the chain. Hands it this occupation's output. */
 export async function advanceAfterComplete(sql: Sql, userId: string, task: TaskRow): Promise<TaskRow | null> {
   if (!task.workflow_id) return null;
   if (task.status !== "done" && task.status !== "handed_off") return null;
   const wf = await getWorkflow(sql, userId, task.workflow_id);
   if (!wf || wf.status === "completed" || wf.status === "blocked") return null;
   const chain = getChain(wf.chain_id);
-  const next = nextRequiredStep(chain, wf.current_step);
+  const nextIndex = wf.current_step + 1;
+  const next = chain.steps[nextIndex];
   if (!next) {
     await sql.query(
       `update workflow_instances set status = 'completed', current_step = $1 where id = $2 and user_id = $3`,
       [chain.steps.length - 1, wf.id, userId],
     );
+    if (task.package_id) {
+      await sql.query(`update work_packages set status = 'closed' where id = $1 and user_id = $2`, [
+        task.package_id,
+        userId,
+      ]);
+    }
     return null;
   }
-  const nextIndex = chain.steps.findIndex((s) => s.roleId === next.roleId && s.name === next.name);
   const existing = await sql.query<TaskRow>(
     `select id, user_id, role_id, title, request_statement, interpretation, status, workflow_id, step_name,
             parent_task_id, package_id, input_json, output_json, evidence_json, uncertainty, recovery_json,
@@ -654,21 +724,35 @@ export async function advanceAfterComplete(sql: Sql, userId: string, task: TaskR
     [userId, wf.id, next.roleId, next.name],
   );
   await sql.query(`update workflow_instances set current_step = $1 where id = $2 and user_id = $3`, [
-    nextIndex < 0 ? wf.current_step + 1 : nextIndex,
+    nextIndex,
     wf.id,
     userId,
   ]);
   if (existing[0]) return existing[0];
+  let priorOutput: unknown = null;
+  try {
+    priorOutput = task.output_json ? JSON.parse(task.output_json) : null;
+  } catch {
+    priorOutput = task.output_json;
+  }
   return createTask(sql, {
     userId,
     roleId: next.roleId,
     title: `${chain.title}: ${next.name}`,
     requestStatement: task.request_statement,
-    interpretation: `Next occupation after ${task.step_name ?? task.role_id}.`,
+    interpretation: `Next occupation after ${task.step_name ?? `role ${task.role_id}`}. Same package.`,
     workflowId: wf.id,
     stepName: next.name,
     parentTaskId: task.id,
+    packageId: task.package_id,
     isTestOnly: task.is_test_only === 1,
+    input: {
+      fromRoleId: task.role_id,
+      fromTaskId: task.id,
+      fromStep: task.step_name,
+      interpretation: task.interpretation,
+      output: priorOutput,
+    },
   });
 }
 
@@ -727,6 +811,37 @@ export async function driveWorkflow(
     nextTaskId: run.handoffTaskId,
     workflowStatus: latestWf?.status ?? wf.status,
   };
+}
+
+/** Run occupations on a chain until blocked, completed, or the step cap. Each step receives the last output. */
+export async function driveUntilBlocked(
+  sql: Sql,
+  userId: string,
+  workflowId: string,
+  maxSteps = 8,
+): Promise<{
+  steps: { taskId: string; roleId: number; status: string; blockedReason: string | null }[];
+  workflowStatus: string;
+}> {
+  const steps: { taskId: string; roleId: number; status: string; blockedReason: string | null }[] = [];
+  let workflowStatus = "running";
+  for (let i = 0; i < maxSteps; i++) {
+    const r = await driveWorkflow(sql, userId, workflowId);
+    workflowStatus = r.workflowStatus;
+    if (r.task) {
+      steps.push({
+        taskId: r.task.id,
+        roleId: r.task.role_id,
+        status: r.task.status,
+        blockedReason: r.blockedReason,
+      });
+    }
+    if (r.blockedReason) break;
+    if (workflowStatus === "completed") break;
+    if (!r.task) break;
+    if (r.task.status === "blocked" || r.task.status === "waiting_approval" || r.task.status === "failed") break;
+  }
+  return { steps, workflowStatus };
 }
 
 export async function listTasks(sql: Sql, userId: string): Promise<TaskRow[]> {

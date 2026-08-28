@@ -1,5 +1,6 @@
 import type { Sql } from "@/lib/db";
 import { newId, sha256Hex } from "./ids.ts";
+import { readZoneObject, writeZoneObject } from "./object-store.ts";
 
 export const STORAGE_ZONES = [
   "originals",
@@ -85,6 +86,7 @@ export async function putObject(
       immutable,
     ],
   );
+  writeZoneObject(objectKey, opts.bytes);
   const verified = await getObject(sql, opts.userId, id);
   if (!verified || verified.checksum_sha256 !== checksum) {
     throw new Error("PERSISTENCE_VERIFY_FAILED");
@@ -106,6 +108,13 @@ export async function getObject(sql: Sql, userId: string, id: string): Promise<S
 }
 
 export async function getObjectBytes(sql: Sql, userId: string, id: string): Promise<Uint8Array> {
+  const meta = await getObject(sql, userId, id);
+  if (!meta) throw new Error("BLOB_NOT_FOUND");
+  const fromDisk = readZoneObject(meta.object_key);
+  if (fromDisk) {
+    if (sha256Hex(fromDisk) !== meta.checksum_sha256) throw new Error("DISK_CHECKSUM_MISMATCH");
+    return fromDisk;
+  }
   const rows = await sql.query<{ bytes: unknown }>(
     `select bytes from object_blobs where id = $1 and user_id = $2`,
     [id, userId],

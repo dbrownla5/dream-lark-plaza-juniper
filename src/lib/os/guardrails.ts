@@ -117,7 +117,11 @@ const PARAPHRASE_RULES: { id: string; when: RegExp; hits: RegExp }[] = [
   },
 ];
 
-export function assertProhibitedSpeech(roleId: number, text: string): GuardDecision {
+export function assertProhibitedSpeech(
+  roleId: number,
+  text: string,
+  phase: "request" | "output" = "request",
+): GuardDecision {
   const role = getRole(roleId);
   const hay = text.toLowerCase();
   const prohibitions = role.prohibitionList.length
@@ -134,6 +138,8 @@ export function assertProhibitedSpeech(roleId: number, text: string): GuardDecis
       };
     }
   }
+
+  if (phase === "output") return { ok: true };
 
   for (const p of prohibitions) {
     const pTok = tokens(p.replace(/^may not\s+/i, ""));

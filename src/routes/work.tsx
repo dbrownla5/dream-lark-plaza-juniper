@@ -112,6 +112,12 @@ function WorkPage() {
                       {t.step_name ? ` · ${t.step_name}` : ""}
                     </p>
                     <p className="mt-2 line-clamp-3">{t.request_statement}</p>
+                    {t.interpretation ? (
+                      <p className="mt-2 rounded-md bg-bg p-2 text-sm">{t.interpretation}</p>
+                    ) : null}
+                    {t.output_json ? (
+                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-subtle">{t.output_json}</pre>
+                    ) : null}
                     {t.uncertainty ? <p className="mt-2 text-review">{t.uncertainty}</p> : null}
                     {t.status === "blocked" || t.status === "queued" ? (
                       <button
@@ -122,6 +128,39 @@ function WorkPage() {
                         Resume
                       </button>
                     ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+          <Panel title="Finished outputs">
+            {q.data.outputs.length === 0 ? (
+              <Empty>No occupation has finished an output yet.</Empty>
+            ) : (
+              <ul className="space-y-3">
+                {q.data.outputs.slice(0, 12).map((t) => (
+                  <li key={t.id} className="rounded-md border border-border p-3 text-sm">
+                    <div className="flex justify-between gap-2">
+                      <span>{roleName(t.role_id)}</span>
+                      <Status value={t.status} />
+                    </div>
+                    {t.interpretation ? <p className="mt-2">{t.interpretation}</p> : null}
+                    {t.output_json ? (
+                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-subtle">{t.output_json}</pre>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+          <Panel title="Approvals">
+            {q.data.approvals.length === 0 ? (
+              <Empty>Nothing waiting on you.</Empty>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {q.data.approvals.map((a) => (
+                  <li key={a.id}>
+                    {a.action_kind} · {a.consequence} <Status value={a.status} />
                   </li>
                 ))}
               </ul>

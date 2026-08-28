@@ -23,6 +23,8 @@ import { Route as WorkRouteImport } from './routes/work'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiIntakeRouteImport } from './routes/api/intake'
 import { Route as ApiMcpRouteImport } from './routes/api/mcp'
+import { Route as ApiProveRouteImport } from './routes/api/prove'
+import { Route as ApiVerifyRouteImport } from './routes/api/verify'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiBlobIdRouteImport } from './routes/api/blob.$id'
 
@@ -96,6 +98,16 @@ const ApiMcpRoute = ApiMcpRouteImport.update({
   path: '/api/mcp',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiProveRoute = ApiProveRouteImport.update({
+  id: '/api/prove',
+  path: '/api/prove',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiVerifyRoute = ApiVerifyRouteImport.update({
+  id: '/api/verify',
+  path: '/api/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -122,6 +134,8 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/api/intake': typeof ApiIntakeRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/api/prove': typeof ApiProveRoute
+  '/api/verify': typeof ApiVerifyRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/blob/$id': typeof ApiBlobIdRoute
 }
@@ -140,6 +154,8 @@ export interface FileRoutesByTo {
   '/api/health': typeof ApiHealthRoute
   '/api/intake': typeof ApiIntakeRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/api/prove': typeof ApiProveRoute
+  '/api/verify': typeof ApiVerifyRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/blob/$id': typeof ApiBlobIdRoute
 }
@@ -159,6 +175,8 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/api/intake': typeof ApiIntakeRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/api/prove': typeof ApiProveRoute
+  '/api/verify': typeof ApiVerifyRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/blob/$id': typeof ApiBlobIdRoute
 }
@@ -179,6 +197,8 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/intake'
     | '/api/mcp'
+    | '/api/prove'
+    | '/api/verify'
     | '/api/auth/$'
     | '/api/blob/$id'
   fileRoutesByTo: FileRoutesByTo
@@ -197,6 +217,8 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/intake'
     | '/api/mcp'
+    | '/api/prove'
+    | '/api/verify'
     | '/api/auth/$'
     | '/api/blob/$id'
   id:
@@ -215,6 +237,8 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/intake'
     | '/api/mcp'
+    | '/api/prove'
+    | '/api/verify'
     | '/api/auth/$'
     | '/api/blob/$id'
   fileRoutesById: FileRoutesById
@@ -234,6 +258,8 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ApiIntakeRoute: typeof ApiIntakeRoute
   ApiMcpRoute: typeof ApiMcpRoute
+  ApiProveRoute: typeof ApiProveRoute
+  ApiVerifyRoute: typeof ApiVerifyRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiBlobIdRoute: typeof ApiBlobIdRoute
 }
@@ -338,6 +364,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMcpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/prove': {
+      id: '/api/prove'
+      path: '/api/prove'
+      fullPath: '/api/prove'
+      preLoaderRoute: typeof ApiProveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/verify': {
+      id: '/api/verify'
+      path: '/api/verify'
+      fullPath: '/api/verify'
+      preLoaderRoute: typeof ApiVerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -370,6 +410,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ApiIntakeRoute: ApiIntakeRoute,
   ApiMcpRoute: ApiMcpRoute,
+  ApiProveRoute: ApiProveRoute,
+  ApiVerifyRoute: ApiVerifyRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiBlobIdRoute: ApiBlobIdRoute,
 }

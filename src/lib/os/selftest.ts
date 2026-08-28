@@ -6,6 +6,7 @@ import { writeContext, correctContext, currentOfLineage, createArtifact, refineA
 import { ingestPhotoBatch } from "./photo.ts";
 import { ingestDocument } from "./documents.ts";
 import { createTask, runOccupation, startChain } from "./runtime.ts";
+import { drainIntakeQueue } from "./queue.ts";
 import { assertActionAllowed, detectCircularHandoff, containsSecret } from "./guardrails.ts";
 import { ROLES } from "./roles.ts";
 import { WORKFLOW_CHAINS } from "./workflows.ts";
@@ -102,6 +103,9 @@ export async function runSyntheticSelfTest(sql: Sql, userId: string): Promise<{ 
   add("R-PHO-DUP", batch.assets.some((a) => a.duplicate_group), "duplicate grouped");
   add("R-PHO-REV", batch.reviewCount >= 1, `review ${batch.reviewCount}`);
   add("R-PHO-WF", Boolean(batch.workflowId), `workflow ${batch.workflowId}`);
+  if (batch.workflowId) {
+    await drainIntakeQueue(sql, { userId, limit: 4 });
+  }
   if (batch.workflowId) {
     const wf = await sql.query<{ current_step: number; status: string; chain_id: string }>(
       `select current_step, status, chain_id from workflow_instances where id = $1 and user_id = $2`,

@@ -2,7 +2,9 @@ import type { Sql } from "@/lib/db";
 import { newId } from "./ids.ts";
 import { ingestOriginal } from "./storage.ts";
 import { classifyIntakeDomain } from "./workflows.ts";
-import { startChain, driveWorkflow } from "./runtime.ts";
+import { startChain } from "./runtime.ts";
+import { createWorkPackage } from "./package.ts";
+import { enqueueJob } from "./queue.ts";
 import { writeContext } from "./context.ts";
 import { audit } from "./workspace.ts";
 import { invokeLlm, llmAvailable } from "./llm.ts";
@@ -127,14 +129,39 @@ export async function ingestDocument(
 
   const known = ["career", "writing", "business", "financial", "resale", "media", "technical", "forensic"];
   const chainId = known.includes(cls.classification) ? cls.classification : "forensic";
+  const pkg = await createWorkPackage(sql, {
+    userId: opts.userId,
+    title: `Document ${opts.filename}`,
+    objective: `Catalog and route this original. Classification candidate=${cls.classification}. Filename is not truth.`,
+    payload: {
+      documentId: id,
+      blobId: blob.id,
+      filename: opts.filename,
+      checksum: blob.checksum_sha256,
+      extractedText: extracted,
+      classification: cls.classification,
+    },
+  });
   const wf = await startChain(sql, {
     userId: opts.userId,
     chainId,
-    requestStatement: `Catalog and route document ${id}. Classification=${cls.classification}. Filename is not truth.`,
+    requestStatement: `Work this original. Document ${id}. Classification=${cls.classification}. Do not invent identity.`,
     subjectId: id,
     isTestOnly: opts.isTestOnly,
+    packageId: pkg.id,
+    input: {
+      documentId: id,
+      blobId: blob.id,
+      checksum: blob.checksum_sha256,
+      extractedText: extracted,
+      classification: cls.classification,
+    },
   });
-  await driveWorkflow(sql, opts.userId, wf.workflowId);
+  const job = await enqueueJob(sql, {
+    userId: opts.userId,
+    kind: "drive_workflow",
+    payload: { workflowId: wf.workflowId, documentId: id },
+  });
 
   await writeContext(sql, {
     userId: opts.userId,

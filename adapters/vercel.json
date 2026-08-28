@@ -1,0 +1,8 @@
+{
+  "id": "vercel",
+  "label": "Vercel HTTPS web application",
+  "localhostProduction": false,
+  "cloudflare": false,
+  "build": "npm run build",
+  "notes": "Nitro vercel preset. DATABASE_URL injected. Object bytes live in Postgres. Disk storage off."
+}

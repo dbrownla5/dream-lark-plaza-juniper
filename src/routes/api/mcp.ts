@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSql } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth/verify.server";
+import { DEV_USER_ID, getSessionUser } from "@/lib/auth/verify.server";
 import { authenticateMcp, handleJsonRpc, mcpUnauthorized, type JsonRpcReq } from "@/lib/os/mcp";
 import { ensureWorkspace } from "@/lib/os/workspace";
 
@@ -14,8 +14,9 @@ export const Route = createFileRoute("/api/mcp")({
           const bearer = authz.toLowerCase().startsWith("bearer ") ? authz.slice(7).trim() : null;
           const session = await getSessionUser(bearer ?? undefined);
           const sql = await getSql();
+          const authOff = import.meta.env.VITE_AUTH_ENABLED === "false";
           const userId = await authenticateMcp(sql, {
-            userIdFromSession: session?.id ?? null,
+            userIdFromSession: session?.id ?? (authOff ? DEV_USER_ID : null),
             token: bearer,
           });
           await ensureWorkspace(sql, userId);

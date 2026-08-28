@@ -7,10 +7,22 @@ import { useState } from "react";
 
 export const Route = createFileRoute("/system")({ component: SystemPage });
 
+type Prove = {
+  ok: boolean;
+  passed: number;
+  failed: number;
+  checks: { id: string; pass: boolean; detail: string }[];
+  interpretation?: string | null;
+  output?: string | null;
+};
+
 function SystemPage() {
   const qc = useQueryClient();
   const q = useAuthedQuery("system", () => loadSystem());
   const [token, setToken] = useState<string | null>(null);
+  const [prove, setProve] = useState<Prove | null>(null);
+  const [proveErr, setProveErr] = useState<string | null>(null);
+  const [proving, setProving] = useState(false);
   const selftest = useMutation({
     mutationFn: () => postSelfTest(),
     onSettled: () => qc.invalidateQueries({ queryKey: ["system"] }),
@@ -65,6 +77,22 @@ function SystemPage() {
               <pre className="mt-3 overflow-x-auto text-xs text-subtle">{q.data.health.payload_json}</pre>
             ) : null}
           </Panel>
+          <Panel title="Server queue">
+            {!q.data.jobs || q.data.jobs.length === 0 ? (
+              <Empty>No intake jobs yet. Bring in a file and the server queues the occupations.</Empty>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {q.data.jobs.map((j) => (
+                  <li key={j.id} className="flex justify-between gap-2">
+                    <span>
+                      {j.kind} · {j.id.slice(0, 18)}
+                    </span>
+                    <span className="font-mono text-xs">{j.status}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
           <Panel title="Errors">
             {q.data.errors.length === 0 ? (
               <Empty>No blocked events recorded.</Empty>
@@ -86,10 +114,46 @@ function SystemPage() {
               <button
                 type="button"
                 className="min-h-11 rounded-md bg-primary px-4 py-2 text-sm text-primary-fg"
-                onClick={() => selftest.mutate()}
-                disabled={selftest.isPending}
+                onClick={async () => {
+                  setProving(true);
+                  setProveErr(null);
+                  try {
+                    const res = await fetch("/api/prove", { headers: { Accept: "application/json" } });
+                    const json = (await res.json()) as Prove;
+                    setProve(json);
+                    if (!res.ok) setProveErr("Prove path failed.");
+                  } catch (e) {
+                    setProveErr(e instanceof Error ? e.message : "Prove path failed.");
+                  } finally {
+                    setProving(false);
+                    qc.invalidateQueries({ queryKey: ["system"] });
+                  }
+                }}
+                disabled={proving}
               >
-                Run synthetic checks
+                {proving ? "Proving…" : "Prove storage and one occupation"}
+              </button>
+              <button
+                type="button"
+                className="min-h-11 rounded-md border border-border px-4 py-2 text-sm"
+                onClick={async () => {
+                  setProving(true);
+                  setProveErr(null);
+                  try {
+                    const res = await fetch("/api/verify", { headers: { Accept: "application/json" } });
+                    const json = (await res.json()) as Prove & { launch?: string };
+                    setProve(json);
+                    if (!json.ok) setProveErr(json.launch || "Verify failed.");
+                  } catch (e) {
+                    setProveErr(e instanceof Error ? e.message : "Verify failed.");
+                  } finally {
+                    setProving(false);
+                    qc.invalidateQueries({ queryKey: ["system"] });
+                  }
+                }}
+                disabled={proving}
+              >
+                {proving ? "Verifying desk…" : "Verify every path"}
               </button>
               <button
                 type="button"
@@ -107,6 +171,22 @@ function SystemPage() {
                 Issue MCP token
               </button>
             </div>
+            {prove ? (
+              <ul className="mt-4 space-y-1 text-sm">
+                {prove.checks.map((c) => (
+                  <li key={c.id} className={c.pass ? "text-ok" : "text-danger"}>
+                    {c.pass ? "pass" : "fail"} · {c.id} · {c.detail}
+                  </li>
+                ))}
+                <li className="pt-2 text-muted">
+                  {prove.passed} passed · {prove.failed} failed
+                </li>
+              </ul>
+            ) : null}
+            {prove?.interpretation ? (
+              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">{prove.interpretation}</pre>
+            ) : null}
+            {proveErr ? <p className="mt-3 text-sm text-danger">{proveErr}</p> : null}
             {selftest.data ? (
               <ul className="mt-4 space-y-1 text-sm">
                 {selftest.data.checks.map((c) => (

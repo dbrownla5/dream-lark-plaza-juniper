@@ -6,9 +6,9 @@ import { useEffect, useState, type ReactNode } from "react";
 const NAV = [
   { to: "/", label: "Today" },
   { to: "/intake", label: "Bring in" },
+  { to: "/media", label: "Catalog" },
   { to: "/agents", label: "Occupations" },
   { to: "/work", label: "Work" },
-  { to: "/review", label: "Review" },
   { to: "/context", label: "Memory" },
   { to: "/system", label: "System" },
 ] as const;

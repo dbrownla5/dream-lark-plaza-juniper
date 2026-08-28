@@ -7,12 +7,14 @@ import { ingestDocument } from "@/lib/os/documents";
 import { writeContext } from "@/lib/os/context";
 import { createTask, runOccupation } from "@/lib/os/runtime";
 import { classifyIntakeDomain } from "@/lib/os/workflows";
+import { ensureServerRuntime } from "@/lib/os/server-runtime";
 
 export const Route = createFileRoute("/api/intake")({
   server: {
     handlers: {
       POST: async ({ request }) => {
         try {
+          ensureServerRuntime();
           const userId = await userIdFromRequest(request);
           const sql = await getSql();
           await ensureWorkspace(sql, userId);
@@ -69,6 +71,8 @@ export const Route = createFileRoute("/api/intake")({
                 taskId: run.task.id,
                 status: run.task.status,
                 blockedReason: run.blockedReason,
+                interpretation: run.task.interpretation,
+                output: run.task.output_json,
                 domain,
               };
             } else {
