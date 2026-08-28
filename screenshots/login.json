@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/login",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Well Lived Citizen",
+      "hasCanvas": false,
+      "bodyTextLen": 203,
+      "bodyTextHash": "5774ee5ba59d6dcc69b8ea38189e263d9cbcf609d75d3d4e0cd6d7b892b21d57",
+      "bodyTextPrefix": "WELL LIVED CITIZEN Your operating system One sign-in. Google or ",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/login.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Well Lived Citizen",
+      "hasCanvas": false,
+      "bodyTextLen": 203,
+      "bodyTextHash": "5774ee5ba59d6dcc69b8ea38189e263d9cbcf609d75d3d4e0cd6d7b892b21d57",
+      "bodyTextPrefix": "WELL LIVED CITIZEN Your operating system One sign-in. Google or ",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/login-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/login.json"
+}
