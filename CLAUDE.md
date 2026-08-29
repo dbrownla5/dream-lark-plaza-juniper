@@ -1,5 +1,11 @@
 # Dayna's MCP/LLM Operating System (the product)
 
+**START HERE: `system/` is the successor build** — Dayna's chosen simple
+stack (Express + Vite/React + Postgres + Gemini, one `.env`), rebuilt from
+the packet spec with the clean engine. The root TanStack app is the Grok-era
+reference implementation: keep it running as the source to port from
+(photo/document pipelines, storage zones), build new work in `system/`.
+
 Read `packet/control_repo/dayna_build_control/README.md`, `contracts/`, and
 `LAST_HANDOFF.md` BEFORE working. Those documents are the source of truth for
 what this system is and how work is proven. Non-negotiables: evidence over

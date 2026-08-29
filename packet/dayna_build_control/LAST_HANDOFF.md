@@ -37,6 +37,10 @@ smokes, live LLM smokes, `/api/verify`, Playwright e2e (workflow-builder).
 `evidence/2026-08-29_rebuild_and_gemini.md`
 
 ## Next stage
-Remote deployment (Stages 02/14 territory): Netlify free tier or node-host
-container + Supabase Postgres (needs the Supabase DB password from Dayna),
-then the one-dashboard merge of Lotbook + workflow-builder behind the OS.
+`system/` is the successor build on Dayna's chosen simple stack (Express +
+Vite/React + pg + Gemini, .env-driven). Verified live: /api/verify 30/30 on
+a fresh Postgres, real resale intake walked two chain steps in-scope, run
+ledger visible, production build green. Next: port photo/document intake +
+storage zones from the reference app into system/, wire real auth, deploy
+system/ remote (any node host + Supabase Postgres — needs DB password from
+Dayna), then merge Lotbook + workflow-builder capabilities behind it.
