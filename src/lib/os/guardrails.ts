@@ -2,12 +2,16 @@ import { getRole, type ActionClass } from "./roles.ts";
 
 const SECRET_PATTERNS: RegExp[] = [
   /xai[_-]?api[_-]?key/i,
+  /gemini[_-]?api[_-]?key/i,
+  /llm[_-]?api[_-]?key/i,
   /api[_-]?key\s*[:=]/i,
-  /bearer\s+[a-z0-9._\-]+/i,
+  /bearer\s+[a-z0-9._-]+/i,
   /password\s*[:=]/i,
   /database_url/i,
   /secret\s*[:=]/i,
   /\bsk-[a-zA-Z0-9]{10,}/,
+  /\bAIza[0-9A-Za-z_-]{30,}/,
+  /\bAQ\.[0-9A-Za-z_-]{20,}/,
   /-----BEGIN [A-Z ]+PRIVATE KEY-----/,
 ];
 

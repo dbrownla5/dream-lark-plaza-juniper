@@ -5,20 +5,7 @@ import { n as createMemoryHistory } from "../_libs/tanstack__history.mjs";
 import { a as getOrigin, c as createSerializationAdapter, d as toCrossJSONAsync, f as toCrossJSONStream, i as getNormalizedURL, l as makeSerovalPlugin, n as mergeHeaders, o as defaultSerovalPlugins, r as attachRouterServerSsrUtils, s as createRawStreamRPCPlugin, t as waitForRequest, u as fromJSON } from "../_libs/@tanstack/router-core+[...].mjs";
 import { n as setCookie, r as toResponse, t as H3Event } from "../_libs/h3-v2+rou3.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
-//#region node_modules/.nitro/vite/services/ssr/index.js
-var ssr_exports = /* @__PURE__ */ __exportAll$1({
-	a: () => getServerFnById,
-	createServerEntry: () => createServerEntry,
-	default: () => server_default,
-	i: () => TSS_SERVER_FUNCTION,
-	n: () => createMiddleware,
-	o: () => getRequest,
-	r: () => createServerFn,
-	s: () => __exportAll,
-	t: () => server_exports
-});
-require_react();
-var import_jsx_runtime = require_jsx_runtime();
+//#region node_modules/.nitro/vite/services/ssr/assets/rolldown-runtime-D7D4PA-g.js
 var __defProp = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
 	let target = {};
@@ -29,6 +16,20 @@ var __exportAll = (all, no_symbols) => {
 	if (!no_symbols) __defProp(target, Symbol.toStringTag, { value: "Module" });
 	return target;
 };
+//#endregion
+//#region node_modules/.nitro/vite/services/ssr/index.js
+var ssr_exports = /* @__PURE__ */ __exportAll$1({
+	a: () => getServerFnById,
+	createServerEntry: () => createServerEntry,
+	default: () => server_default,
+	i: () => TSS_SERVER_FUNCTION,
+	n: () => createMiddleware,
+	o: () => getRequest,
+	r: () => createServerFn,
+	t: () => server_exports
+});
+require_react();
+var import_jsx_runtime = require_jsx_runtime();
 function StartServer(props) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RouterProvider, { router: props.router });
 }
@@ -117,7 +118,7 @@ var HEADERS = { TSS_SHELL: "X-TSS_SHELL" };
 * the dev styles URL for route-scoped CSS collection.
 */
 async function getStartManifest(matchedRoutes) {
-	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-CQDUnCBZ.mjs");
+	const { tsrStartManifest } = await import("../_tanstack-start-manifest_v-BwpIsDWJ.mjs");
 	const startManifest = tsrStartManifest();
 	let routes = startManifest.routes;
 	routes[rootRouteId];
@@ -139,91 +140,95 @@ async function getStartManifest(matchedRoutes) {
 var manifest = {
 	"15a572260f3181072141430b95a290dbd8bcaa447a35f973c08e61fda94d25f9": {
 		functionName: "postRunRole_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"16507f8bc426157025e34b8f8ad6fdf77c134329ac997343a75f22d46bca30e8": {
 		functionName: "submitWords_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"1c48f574f87ad3548a64672122efa9570b10da1617e5fb73a3540da9b16c66ff": {
 		functionName: "loadSystem_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"1ead7bebe510b535aac00ff4b3b9533bc0cfbe5a21b8b0c7f34e89888c9a76cb": {
 		functionName: "loadReview_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"2c4985e96c199268f7f639534cb5e8e31d6b19d43286bf77416413db60ffde26": {
 		functionName: "fetchSessionUser_createServerFn_handler",
-		importer: () => import("../__root-VjCJ-4qr.mjs")
+		importer: () => import("../__root-BCco52y1.mjs")
+	},
+	"3ec87ce1568187855b0f6d78b34205b7b9cdf6596c1fac4440ad658baf64deef": {
+		functionName: "postDriveWorkflow_createServerFn_handler",
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"46bf51134ce78b33668719ee7dcf437d3f5ed4ba13c524de8523e1da6319b823": {
 		functionName: "postApproval_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"49dbb9cc84a771efe63a804262f28f0469037b5be608d2f6202845781efd93b1": {
 		functionName: "loadWork_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"5d229e8c07a0d04251625a870c90e170625dc6f4cafa1592f4632a6200ef8f61": {
 		functionName: "postMcpToken_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"61c3a9cf505ce555f011a9cd99afbb4af90e267a1e8cec70f021b4735bc4e5a7": {
 		functionName: "loadHome_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"68b4864f0c3545d6898a5fdc318d88187819f8d15b153bdbe5f9dd3af966555d": {
 		functionName: "ingestViaFn_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"839a34b74e283c8b886bea7b8bf9fa49b60030bdaf4c78ef936721d23b2cb91a": {
 		functionName: "loadDocuments_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"8a37e85ec985d189858e2d8e9ce54a200fedaca4eae363102ae222a560e4455c": {
 		functionName: "postStartChain_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"8f908008f69067becaa467cf1cda9b45b8ac424976d53bc3f7550ac61474c633": {
 		functionName: "loadContext_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"963a868fc0e00f5e51b64a4ead60c1d48439fd948e3cdc97cda63eeb3ec546ef": {
 		functionName: "postResume_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"9d570e9ad256269e593fabca6ee6775bd87698190af132fffd9c008a8af64a14": {
 		functionName: "postQualify_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"9dbd7b3d567614fe256f408032ea34664545414bd3e1adcb2f4dee475943f68c": {
 		functionName: "postSelfTest_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"a0e3bcf60955ab12a4fea42f06c8f2bca64a6f226b0f8363b016d4371001640b": {
 		functionName: "loadMedia_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"b21cd5edb8910bdfe12b817bef301c381d23e67f1ae09bd26a96bb531a007c31": {
 		functionName: "loadAgents_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"ba43822caf69b3d104990edbffec74bb34b1791094fc04be50b77168013fccba": {
 		functionName: "loadOutputs_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"bae63bd1258a5008e9aa479cb1eb8266bca7bed682b7aea91c80f5d20e0ffe26": {
 		functionName: "postRefine_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"d777d437ff4236b21d4b8a1cd8d18ccb1a2811222dd2e0b943f967eaed2e65ca": {
 		functionName: "submitCorrection_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	},
 	"e7c83328a975ca6e581baf536aee68ab2179c77a1180acae9516ed261d146f30": {
 		functionName: "sealVoicePillar_createServerFn_handler",
-		importer: () => import("./fns-BPRhAnKe.mjs")
+		importer: () => import("./fns-CdbMGj0f.mjs")
 	}
 };
 async function getServerFnById(id, access) {
@@ -1493,7 +1498,7 @@ var getBaseManifest = getProdBaseManifest;
 var createEarlyHintsForRequest = createEarlyHintsCollector;
 async function loadEntries() {
 	const [routerEntry, startEntry, pluginAdapters] = await Promise.all([
-		import("./router-BFD3Z3wa.mjs").then((n) => n.t),
+		import("./router-BTkk18-i.mjs").then((n) => n.t),
 		import("./start-5Z2QO8AU.mjs"),
 		import("./empty-plugin-adapters-D9UWiqvJ.mjs")
 	]);
@@ -1940,4 +1945,4 @@ function createServerEntry(entry) {
 }
 var server_default = createServerEntry({ fetch });
 //#endregion
-export { getServerFnById as a, ssr_exports as c, createServerEntry, server_default as default, TSS_SERVER_FUNCTION as i, createMiddleware as n, getRequest as o, createServerFn as r, __exportAll as s, server_exports as t };
+export { getServerFnById as a, __exportAll as c, createServerEntry, server_default as default, TSS_SERVER_FUNCTION as i, createMiddleware as n, getRequest as o, createServerFn as r, ssr_exports as s, server_exports as t };

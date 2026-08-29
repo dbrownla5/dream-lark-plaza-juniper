@@ -1,0 +1,1 @@
+import{i as e,t}from"./react-SIfiwpqq.js";import{a as n,t as r}from"./useNavigate-DrqvhG58.js";import"./client-gQVcFnqq.js";import{n as i}from"./use-current-user-DXV-mEDe.js";var a=e(t()),o=n();function s(){let{user:e}=i(),[t,n]=(0,a.useState)(null),[s,c]=(0,a.useState)(null);return(0,o.jsx)(r,{to:`/`})}export{s as component};

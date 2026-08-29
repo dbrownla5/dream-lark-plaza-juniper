@@ -42,7 +42,7 @@ export const loadHome = createServerFn({ method: "GET" })
       listWorkflowPaths(sql, context.userId),
     ]);
     const waiting = tasks.filter((t) => t.status === "waiting_approval" || t.status === "blocked");
-    const active = tasks.filter((t) => t.status === "running" || t.status === "queued" || t.status === "handed_off");
+    const active = tasks.filter((t) => t.status === "running" || t.status === "queued");
     const done = tasks.filter((t) => t.status === "done" || t.status === "handed_off").slice(0, 6);
     return {
       userId: context.userId,
@@ -70,7 +70,7 @@ export const loadAgents = createServerFn({ method: "GET" })
     const sql = await getSql();
     await ensureWorkspace(sql, context.userId);
     const tasks = await listTasks(sql, context.userId);
-    const skills = await listSkills(sql);
+    const skills = await listSkills(sql, context.userId);
     return {
       roles: ROLES.map((r) => ({
         id: r.id,
@@ -184,9 +184,14 @@ export const loadOutputs = createServerFn({ method: "GET" })
     );
     const artifacts = await sql.query<{
       id: string; title: string; kind: string; lineage_id: string; current_version: number; created_at: string;
+      body: string | null;
     }>(
-      `select id, title, kind, lineage_id, current_version, created_at::text as created_at
-       from artifacts where user_id = $1 order by created_at desc limit 40`,
+      `select a.id, a.title, a.kind, a.lineage_id, a.current_version, a.created_at::text as created_at,
+              v.body
+       from artifacts a
+       left join artifact_versions v
+         on v.artifact_id = a.id and v.user_id = a.user_id and v.version_n = a.current_version
+       where a.user_id = $1 order by a.created_at desc limit 40`,
       [context.userId],
     );
     return { outputs, artifacts };
@@ -211,8 +216,24 @@ export const loadSystem = createServerFn({ method: "GET" })
     const zones = await zoneCensus(sql, context.userId);
     const paths = await listWorkflowPaths(sql, context.userId);
     const jobs = await listJobs(sql, context.userId, 12);
+    const runs = await sql.query<{
+      id: string; task_id: string; role_id: number; provider: string | null; model: string | null;
+      prompt_tokens: number | null; completion_tokens: number | null; cost_cents: number | null;
+      blocked_reason: string | null; created_at: string;
+    }>(
+      `select id, task_id, role_id, provider, model, prompt_tokens, completion_tokens, cost_cents,
+              blocked_reason, created_at::text as created_at
+       from agent_runs where user_id = $1 order by created_at desc limit 20`,
+      [context.userId],
+    );
+    const runTotals = await sql.query<{ n: number; cost: number }>(
+      `select count(*)::int as n, coalesce(sum(cost_cents),0)::real as cost from agent_runs where user_id = $1`,
+      [context.userId],
+    );
     return {
       health: health[0] ?? null,
+      runs,
+      runTotals: runTotals[0] ?? { n: 0, cost: 0 },
       llm: llmAvailable() ? LLM_MODEL : "UNAVAILABLE",
       db: dbSource,
       spend,
@@ -366,7 +387,7 @@ export const postQualify = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const sql = await getSql();
     await ensureWorkspace(sql, context.userId);
-    return qualifyMechanicalSkills(sql);
+    return qualifyMechanicalSkills(sql, context.userId);
   });
 
 export const postMcpToken = createServerFn({ method: "POST" })

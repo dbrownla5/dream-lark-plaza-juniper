@@ -29,9 +29,13 @@ test("circular handoff is blocked", () => {
 
 test("secrets are detected and redacted", () => {
   assert.equal(containsSecret("XAI_API_KEY=abc"), true);
+  assert.equal(containsSecret("GEMINI_API_KEY=abc"), true);
   assert.equal(containsSecret("Authorization: Bearer abcdefghijklmnop"), true);
+  assert.equal(containsSecret("AIzaSyA1234567890abcdefghijklmnopqrstuv"), true);
+  assert.equal(containsSecret("AQ.SyntheticTestTokenValue00"), true);
   assert.equal(containsSecret("ordinary catalog note"), false);
   assert.match(redactSecrets("password=hunter2"), /REDACTED/);
+  assert.match(redactSecrets("key AIzaSyA1234567890abcdefghijklmnopqrstuv end"), /REDACTED/);
 });
 
 test("blocked runs cannot be marked done", () => {

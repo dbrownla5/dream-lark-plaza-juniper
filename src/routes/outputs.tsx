@@ -38,8 +38,13 @@ function OutputsPage() {
             ) : (
               <ul className="space-y-2 text-sm">
                 {q.data.artifacts.map((a) => (
-                  <li key={String(a.id)}>
-                    {String(a.title)} · {String(a.kind)} · v{String(a.current_version)}
+                  <li key={String(a.id)} className="rounded-md border border-border p-3">
+                    <p className="font-medium">
+                      {String(a.title)} · {String(a.kind)} · v{String(a.current_version)}
+                    </p>
+                    {a.body ? (
+                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-subtle">{String(a.body)}</pre>
+                    ) : null}
                   </li>
                 ))}
               </ul>

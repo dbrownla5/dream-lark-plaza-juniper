@@ -25,7 +25,7 @@ export async function runSyntheticSelfTest(sql: Sql, userId: string): Promise<{ 
   add("R-ROL-01", ROLES.length === 40, `${ROLES.length} roles loaded`);
   add("R-WF-COUNT", WORKFLOW_CHAINS.length === 8, `${WORKFLOW_CHAINS.length} chains`);
 
-  const q = await qualifyMechanicalSkills(sql);
+  const q = await qualifyMechanicalSkills(sql, userId);
   add("R-SKL-01", q.qualified > 0, `qualified ${q.qualified}`);
 
   const png = makeSolidPng(30, 90, 50, 24, 24);
@@ -131,7 +131,7 @@ export async function runSyntheticSelfTest(sql: Sql, userId: string): Promise<{ 
   add("R-NEG-05", !forbidden.ok, forbidden.ok ? "intake deleted" : forbidden.message);
   const circ = detectCircularHandoff([7, 8, 7], 8);
   add("R-RUN-CIRC", !circ.ok, circ.ok ? "circle allowed" : circ.message);
-  add("R-GRD-03", containsSecret("XAI_API_KEY=abc") && containsSecret("Bearer sk-testtokenvalue"), "secret detector");
+  add("R-GRD-03", containsSecret("GEMINI_API_KEY=abc") && containsSecret("Bearer sk-testtokenvalue"), "secret detector");
 
   const task = await createTask(sql, {
     userId,

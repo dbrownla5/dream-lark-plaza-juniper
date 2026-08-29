@@ -19,24 +19,28 @@ const MECHANICAL: Record<string, number[]> = {
   checksum_duplicate: [34, 27],
 };
 
-export async function listSkills(sql: Sql, roleId?: number): Promise<SkillRow[]> {
+export async function listSkills(sql: Sql, userId: string, roleId?: number): Promise<SkillRow[]> {
   if (roleId != null) {
-    return sql.query<SkillRow>(`select id, role_id, name, status, evidence from skills where role_id = $1`, [
-      roleId,
-    ]);
+    return sql.query<SkillRow>(
+      `select id, role_id, name, status, evidence from skills where user_id = $1 and role_id = $2`,
+      [userId, roleId],
+    );
   }
-  return sql.query<SkillRow>(`select id, role_id, name, status, evidence from skills order by role_id, name`);
+  return sql.query<SkillRow>(
+    `select id, role_id, name, status, evidence from skills where user_id = $1 order by role_id, name`,
+    [userId],
+  );
 }
 
-export async function isSkillQualified(sql: Sql, roleId: number, name: string): Promise<boolean> {
+export async function isSkillQualified(sql: Sql, userId: string, roleId: number, name: string): Promise<boolean> {
   const rows = await sql.query<SkillRow>(
-    `select id, role_id, name, status, evidence from skills where role_id = $1 and name = $2`,
-    [roleId, name],
+    `select id, role_id, name, status, evidence from skills where user_id = $1 and role_id = $2 and name = $3`,
+    [userId, roleId, name],
   );
   return rows[0]?.status === "qualified";
 }
 
-export async function qualifyMechanicalSkills(sql: Sql): Promise<{ qualified: number; blocked: number }> {
+export async function qualifyMechanicalSkills(sql: Sql, userId: string): Promise<{ qualified: number; blocked: number }> {
   let qualified = 0;
   let blocked = 0;
 
@@ -62,8 +66,8 @@ export async function qualifyMechanicalSkills(sql: Sql): Promise<{ qualified: nu
         ? `synthetic function check ${key} passed ${new Date().toISOString()}`
         : "candidate until occupational LLM qualification; mechanical check not mapped";
       await sql.query(
-        `update skills set status = $1, evidence = $2 where role_id = $3 and name = $4 and status <> 'blocked'`,
-        [status, evidence, role.id, name],
+        `update skills set status = $1, evidence = $2 where user_id = $3 and role_id = $4 and name = $5 and status <> 'blocked'`,
+        [status, evidence, userId, role.id, name],
       );
       if (pass) qualified += 1;
     }
@@ -79,14 +83,14 @@ export async function qualifyMechanicalSkills(sql: Sql): Promise<{ qualified: nu
   ];
   for (const f of families) {
     const rows = await sql.query<SkillRow>(
-      `select id, role_id, name, status, evidence from skills where role_id = $1`,
-      [f.roleId],
+      `select id, role_id, name, status, evidence from skills where user_id = $1 and role_id = $2`,
+      [userId, f.roleId],
     );
     const hit = rows.find((r) => r.name.toLowerCase().includes(f.skillContains.toLowerCase())) ?? rows[0];
     if (hit) {
       await sql.query(
-        `update skills set status = 'qualified', evidence = $1 where id = $2`,
-        [`family gate synthetic qualification ${new Date().toISOString()}`, hit.id],
+        `update skills set status = 'qualified', evidence = $1 where id = $2 and user_id = $3`,
+        [`family gate synthetic qualification ${new Date().toISOString()}`, hit.id, userId],
       );
       qualified += 1;
     } else {
@@ -98,12 +102,13 @@ export async function qualifyMechanicalSkills(sql: Sql): Promise<{ qualified: nu
 
 export async function assertRoleSkillAllowed(
   sql: Sql,
+  userId: string,
   roleId: number,
   skillName: string,
 ): Promise<void> {
   const rows = await sql.query<SkillRow>(
-    `select id, role_id, name, status, evidence from skills where role_id = $1 and name = $2`,
-    [roleId, skillName],
+    `select id, role_id, name, status, evidence from skills where user_id = $1 and role_id = $2 and name = $3`,
+    [userId, roleId, skillName],
   );
   if (!rows[0]) throw new Error(`SKILL_NOT_ON_ROLE:${roleId}:${skillName}`);
   if (rows[0].status === "blocked") throw new Error(`SKILL_BLOCKED:${skillName}`);

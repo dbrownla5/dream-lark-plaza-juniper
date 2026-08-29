@@ -77,6 +77,30 @@ function SystemPage() {
               <pre className="mt-3 overflow-x-auto text-xs text-subtle">{q.data.health.payload_json}</pre>
             ) : null}
           </Panel>
+          <Panel title="Run ledger">
+            {!q.data.runs || q.data.runs.length === 0 ? (
+              <Empty>No occupational runs recorded yet.</Empty>
+            ) : (
+              <>
+                <p className="mb-2 text-xs text-muted">
+                  {q.data.runTotals.n} runs · {q.data.runTotals.cost.toFixed(2)} ¢ total
+                </p>
+                <ul className="space-y-2 text-sm">
+                  {q.data.runs.map((r) => (
+                    <li key={String(r.id)} className="flex justify-between gap-2">
+                      <span>
+                        role {String(r.role_id)} · {r.model ? String(r.model) : "no provider call"}
+                        {r.blocked_reason ? ` · ${String(r.blocked_reason).slice(0, 60)}` : ""}
+                      </span>
+                      <span className="font-mono text-xs">
+                        {r.prompt_tokens != null ? `${r.prompt_tokens}+${r.completion_tokens} tok` : "—"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </Panel>
           <Panel title="Server queue">
             {!q.data.jobs || q.data.jobs.length === 0 ? (
               <Empty>No intake jobs yet. Bring in a file and the server queues the occupations.</Empty>
