@@ -1,10 +1,33 @@
 import { redactSecrets } from "./guardrails.ts";
 
-export const LLM_MODEL = "grok-4.5";
-export const LLM_BASE = "https://api.x.ai/v1";
+// Provider: Google Gemini via its OpenAI-compatible endpoint.
+// A free Google AI Studio key (GEMINI_API_KEY) works within generous free-tier
+// limits at $0. The OpenAI-compatible surface lets us keep the same request
+// shape used across the workflow engine. Model + base are env-overridable so
+// the app can be pointed at Vertex/AI Gateway later without code changes.
+export const LLM_PROVIDER = process.env.LLM_PROVIDER?.trim() || "gemini";
+export const LLM_MODEL = process.env.LLM_MODEL?.trim() || "gemini-2.5-flash";
+export const LLM_BASE =
+  process.env.LLM_BASE?.trim() ||
+  "https://generativelanguage.googleapis.com/v1beta/openai";
+
+// Vision can use a lighter/faster model; falls back to the main model.
+export const LLM_VISION_MODEL =
+  process.env.LLM_VISION_MODEL?.trim() || LLM_MODEL;
+
+function llmApiKey(): string | undefined {
+  return (
+    process.env.GEMINI_API_KEY?.trim() ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
+    process.env.GOOGLE_API_KEY?.trim() ||
+    // Legacy fallback so an existing xAI key still works if LLM_BASE points there.
+    process.env.XAI_API_KEY?.trim() ||
+    undefined
+  );
+}
 
 export function llmAvailable(): boolean {
-  return Boolean(process.env.XAI_API_KEY?.trim());
+  return Boolean(llmApiKey());
 }
 
 export type LlmOk = {
@@ -35,7 +58,7 @@ export async function invokeLlm(opts: {
   maxTokens?: number;
   json?: boolean;
 }): Promise<LlmResult> {
-  const apiKey = process.env.XAI_API_KEY?.trim();
+  const apiKey = llmApiKey();
   if (!apiKey) {
     return {
       ok: false,
@@ -72,7 +95,7 @@ export async function invokeLlm(opts: {
       return {
         ok: false,
         code: "LLM_ERROR",
-        error: `xAI API error ${res.status}: ${body.slice(0, 400)}`,
+        error: `LLM API error ${res.status}: ${body.slice(0, 400)}`,
       };
     }
     const json = (await res.json()) as {
@@ -108,7 +131,7 @@ export async function invokeVision(opts: {
   imageBase64: string;
   mime: string;
 }): Promise<LlmResult> {
-  const apiKey = process.env.XAI_API_KEY?.trim();
+  const apiKey = llmApiKey();
   if (!apiKey) {
     return {
       ok: false,
@@ -125,7 +148,7 @@ export async function invokeVision(opts: {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: LLM_MODEL,
+        model: LLM_VISION_MODEL,
         max_tokens: 500,
         temperature: 0.1,
         messages: [
@@ -154,7 +177,7 @@ export async function invokeVision(opts: {
       return {
         ok: false,
         code: "LLM_ERROR",
-        error: `xAI vision error ${res.status}: ${body.slice(0, 400)}`,
+        error: `LLM vision error ${res.status}: ${body.slice(0, 400)}`,
       };
     }
     const json = (await res.json()) as {

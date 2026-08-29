@@ -3,3 +3,8 @@ node_modules/
 .github_repo
 .env
 .env.*
+
+# Local runtime data (embedded PGLite DB + disk storage). Regenerated on start
+# from migrations/*.sql. Real deploys use a hosted Postgres. Never commit this.
+data/
+.node_modules.lock

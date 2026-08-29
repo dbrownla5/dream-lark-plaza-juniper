@@ -9,7 +9,7 @@ import {
   sanitizeForAgentContext,
   assertProhibitedSpeech,
 } from "./guardrails.ts";
-import { invokeLlm, llmAvailable, LLM_MODEL } from "./llm.ts";
+import { invokeLlm, llmAvailable, LLM_MODEL, LLM_PROVIDER } from "./llm.ts";
 import { retrieveForTask, writeContext, listVoicePillars } from "./context.ts";
 import { newId } from "./ids.ts";
 import { audit, dailySpendCents, recordUsage, spendCeiling } from "./workspace.ts";
@@ -390,13 +390,14 @@ export async function runOccupation(
 
   await sql.query(
     `insert into agent_runs (id, task_id, user_id, role_id, cycle_step, provider, model, prompt_tokens, completion_tokens, cost_cents, blocked_reason, rubric_json)
-     values ($1,$2,$3,$4,$5,'xai',$6,$7,$8,$9,$10,$11)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       newId("run"),
       task.id,
       opts.userId,
       role.id,
       CYCLE_STEPS.join(","),
+      LLM_PROVIDER,
       llm.model,
       llm.promptTokens,
       llm.completionTokens,
@@ -483,8 +484,8 @@ async function fail(
   );
   await sql.query(
     `insert into agent_runs (id, task_id, user_id, role_id, cycle_step, provider, model, blocked_reason, rubric_json)
-     values ($1,$2,$3,$4,'fail_visibly_if_blocked','xai',$5,$6,$7)`,
-    [newId("run"), task.id, task.user_id, task.role_id, LLM_MODEL, reason, JSON.stringify(rubric)],
+     values ($1,$2,$3,$4,'fail_visibly_if_blocked',$5,$6,$7,$8)`,
+    [newId("run"), task.id, task.user_id, task.role_id, LLM_PROVIDER, LLM_MODEL, reason, JSON.stringify(rubric)],
   );
   await sql.query(
     `insert into recovery_points (id, task_id, user_id, snapshot_json) values ($1,$2,$3,$4)`,

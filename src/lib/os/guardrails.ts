@@ -2,6 +2,8 @@ import { getRole, type ActionClass } from "./roles.ts";
 
 const SECRET_PATTERNS: RegExp[] = [
   /xai[_-]?api[_-]?key/i,
+  /(gemini|google)[_-]?(generative[_-]?ai[_-]?)?api[_-]?key/i,
+  /\bAIza[0-9A-Za-z_\-]{20,}/,
   /api[_-]?key\s*[:=]/i,
   /bearer\s+[a-z0-9._\-]+/i,
   /password\s*[:=]/i,
