@@ -137,39 +137,7 @@ export function nextRequiredStep(chain: WorkflowChain, currentIndex: number): Wo
   return null;
 }
 
-export function classifyIntakeDomain(text: string): {
-  chainId: string;
-  roleId: number;
-  confidence: number;
-  uncertain: boolean;
-} {
-  const t = text.toLowerCase();
-  const hits: { chainId: string; roleId: number; score: number }[] = [];
-  const add = (chainId: string, roleId: number, words: string[]) => {
-    const score = words.reduce((n, w) => n + (t.includes(w) ? 1 : 0), 0);
-    if (score) hits.push({ chainId, roleId, score });
-  };
-  add("career", 7, ["job", "resume", "interview", "application", "hiring", "role fit"]);
-  add("writing", 15, ["essay", "voice", "letter", "draft", "rewrite", "edit this"]);
-  add("writing", 13, ["email", "follow-up", "correspondence"]);
-  add("writing", 14, ["difficult conversation", "apology", "boundary", "personal message"]);
-  add("business", 17, ["offer", "pricing", "campaign", "positioning", "business idea"]);
-  add("financial", 23, ["bill", "cash flow", "invoice", "receipt", "consignment"]);
-  add("resale", 27, ["resale", "listing", "consign", "ebay", "poshmark", "sold comp"]);
-  add("media", 34, ["photo", "photos", "image", "batch", "jpeg", "png"]);
-  add("technical", 37, ["bug", "repository", "deploy", "typeerror", "build failed"]);
-  add("forensic", 40, ["timeline", "chronology", "evidence package", "forensic"]);
-  hits.sort((a, b) => b.score - a.score);
-  if (!hits.length) {
-    return { chainId: "writing", roleId: 1, confidence: 0.2, uncertain: true };
-  }
-  const top = hits[0];
-  const second = hits[1]?.score ?? 0;
-  const uncertain = top.score < 2 || top.score === second;
-  return {
-    chainId: top.chainId,
-    roleId: top.roleId,
-    confidence: Math.min(0.95, 0.35 + top.score * 0.15),
-    uncertain,
-  };
-}
+// There is deliberately no keyword classifier here. Picking Dayna's workflow
+// from words in a sentence produced confident wrong answers (an estate cleanout
+// routed to the writing chain). When the domain is not stated, the system asks
+// her once and shows the list — it does not infer.
