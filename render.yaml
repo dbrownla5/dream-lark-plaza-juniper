@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: daynas-system-app
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: cd system && npm install && npm run build
+    startCommand: cd system && npm start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: daynas-system-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22
+
+databases:
+  - name: daynas-system-db
+    plan: free
+    region: oregon
+    postgresMajorVersion: 16
