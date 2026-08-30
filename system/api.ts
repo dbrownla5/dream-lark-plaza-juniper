@@ -23,13 +23,11 @@ import { handleJsonRpc } from "./lib/mcp.ts";
 import busboy from "busboy";
 import {
   preserveFile,
-  analyzeImage,
   extractDocumentText,
   createBatch,
   listFiles,
   listBatches,
   getFile,
-  startBatchWorkflow,
 } from "./lib/intake.ts";
 import { getObject, storageHealth } from "./lib/storage.ts";
 import { sendMessage, listMessages, listThreads, agentDirectory } from "./lib/chat.ts";
@@ -116,9 +114,9 @@ api.post(
   }),
 );
 
-// Put work on a desk. The chain is Dayna's pick, never inferred. If she has
-// not said which kind of work this is, nothing starts — her words are saved and
-// she gets asked once, with the list. A wrong guess costs her more than a click.
+// Dayna's words go in and are kept as hers. Nothing is started, because no
+// job has been built out yet. When a real job exists it gets offered here by
+// name — never a list of placeholder categories to pick from.
 api.post(
   "/intake",
   wrap(async (req, res) => {
@@ -129,38 +127,16 @@ api.post(
     }
     const sql = await getSql();
     await ensureWorkspace(sql, USER);
-    const chainId = req.body?.chainId ? String(req.body.chainId) : null;
-
-    if (!chainId) {
-      const record = await writeContext(sql, {
-        userId: USER,
-        kind: "user_statement",
-        body: statement,
-        author: "dayna",
-        source: "intake",
-      });
-      res.json({
-        needsChoice: true,
-        contextId: record.id,
-        question: "Which kind of work is this?",
-        choices: WORKFLOW_CHAINS.map((c) => ({ id: c.id, title: c.title })),
-        note: "Saved in your words. Nothing has been routed.",
-      });
-      return;
-    }
-
-    const started = await startChain(sql, {
+    const record = await writeContext(sql, {
       userId: USER,
-      chainId,
-      requestStatement: statement,
-      subjectKind: "statement",
+      kind: "user_statement",
+      body: statement,
+      author: "dayna",
+      source: "intake",
     });
-    const driven = await driveWorkflow(sql, USER, started.workflowId);
     res.json({
-      workflowId: started.workflowId,
-      chainId,
-      firstTask: driven.task,
-      blockedReason: driven.blockedReason,
+      contextId: record.id,
+      note: "Saved in your words. No job has been built to run this through yet, so nothing was started.",
     });
   }),
 );
@@ -315,19 +291,18 @@ api.post(
         duplicateOf: p.duplicateOf,
         backend: p.backend,
       })),
-      note: "Originals are stored. Analysis runs next and does not change them.",
+      note: "Originals are stored.",
     });
 
-    // Analysis after the response: preservation is the promise, analysis is the
-    // follow-on. A failure here leaves the file preserved and visible in review.
+    // Text is read out of documents we can actually read — that is reading a
+    // file, not judging it. Photos are preserved and cataloged and nothing
+    // more: there is no built photo job yet, and a generic "describe this
+    // image" call is not one.
     for (const p of preserved) {
       if (p.file.status === "failed" || p.duplicateOf) continue;
+      if (p.file.kind !== "document") continue;
       try {
-        if (p.file.kind === "image") {
-          await analyzeImage(sql, USER, p.file, p.bytes);
-        } else if (p.file.kind === "document") {
-          await extractDocumentText(sql, USER, p.file, p.bytes);
-        }
+        await extractDocumentText(sql, USER, p.file, p.bytes);
       } catch (err) {
         await sql.query(
           `update files set status = 'review', failure_reason = $2, updated_at = now() where id = $1`,
@@ -373,23 +348,6 @@ api.get(
     res.setHeader("Content-Type", obj.mime || file.mime);
     res.setHeader("Cache-Control", "private, max-age=3600");
     res.send(obj.bytes);
-  }),
-);
-
-// Start the workflow for a batch — from the page it belongs to.
-api.post(
-  "/batches/:id/start",
-  wrap(async (req, res) => {
-    const sql = await getSql();
-    const chainId = String(req.body?.chainId ?? "media");
-    const workflowId = await startBatchWorkflow(sql, {
-      userId: USER,
-      batchId: String(req.params.id),
-      chainId,
-      statement: String(req.body?.statement ?? "Work this batch."),
-    });
-    const driven = await driveWorkflow(sql, USER, workflowId);
-    res.json({ workflowId, chainId, task: driven.task, blockedReason: driven.blockedReason });
   }),
 );
 

@@ -43,13 +43,8 @@ export function Files({ surface }: { surface: "photos" | "documents" }) {
         form.append("surface", surface);
         for (const f of chosen) form.append("files", f);
         await api.upload<{ batchId: string }>("/upload", form);
-        setBusy("Saved. Looking at them now…");
+        setBusy(null);
         await load();
-        // Analysis continues server-side; check back shortly.
-        setTimeout(() => {
-          load().catch(() => {});
-          setBusy(null);
-        }, 4000);
       } catch (e) {
         setBusy(null);
         setError(e instanceof Error ? e.message : "The upload failed. Nothing was saved.");
@@ -65,7 +60,7 @@ export function Files({ surface }: { surface: "photos" | "documents" }) {
       title={photos ? "Photos" : "Documents"}
       lede={
         photos
-          ? "Drop a batch in. Originals are saved before anything is done to them, and they're never renamed — anything the system decides is separate and yours to overrule."
+          ? "Drop a batch in. Originals are saved exactly as they came and never renamed. Nothing is done to them beyond that yet — the photo job gets built out with you before anything starts touching them."
           : "Drop documents in. The original is kept exactly as it came, and everything derived from it points back to it."
       }
       action={
@@ -159,22 +154,31 @@ export function Files({ surface }: { surface: "photos" | "documents" }) {
                     {b.failed_count > 0 && ` · ${b.failed_count} failed`} · {when(b.created_at)}
                   </p>
                 </div>
-                {b.workflow_id ? (
-                  <span className="text-sm text-stone-500">Working</span>
-                ) : (
-                  <Button
-                    kind="quiet"
-                    onClick={async () => {
-                      await api.post(`/batches/${b.id}/start`, {
-                        chainId: photos ? "media" : "writing",
-                        statement: `Work the batch "${b.label}".`,
-                      });
-                      load().catch(() => {});
-                    }}
-                  >
-                    Start work on this
-                  </Button>
-                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {batches.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-stone-400">
+            Batches
+          </h2>
+          <div className="space-y-2">
+            {batches.map((b) => (
+              <div
+                key={b.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3"
+              >
+                <div>
+                  <p className="text-[15px] font-medium text-stone-900">{b.label}</p>
+                  <p className="text-sm text-stone-500">
+                    {b.file_count} {b.file_count === 1 ? "file" : "files"}
+                    {b.review_count > 0 && ` · ${b.review_count} need you`}
+                    {b.failed_count > 0 && ` · ${b.failed_count} failed`} · {when(b.created_at)}
+                  </p>
+                </div>
               </div>
             ))}
           </div>

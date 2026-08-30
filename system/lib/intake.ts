@@ -14,10 +14,6 @@
 import type { Sql } from "./db.ts";
 import { newId, sha256Hex } from "./ids.ts";
 import { putObject, type Zone } from "./storage.ts";
-import { invokeVision } from "./llm.ts";
-import { writeContext } from "./context.ts";
-import { recordUsage } from "./workspace.ts";
-import { startChain } from "./runtime.ts";
 
 export type FileRow = {
   id: string;
@@ -194,99 +190,14 @@ export async function listBatches(sql: Sql, userId: string) {
   );
 }
 
-/**
- * Look at an image and write down only what is visible. Uncertainty goes to
- * review; it is never resolved by guessing. A model failure is recorded as a
- * failure — the file stays preserved and cataloged either way.
- */
-export async function analyzeImage(
-  sql: Sql,
-  userId: string,
-  file: FileRow,
-  bytes: Buffer,
-): Promise<FileRow> {
-  await sql.query(`update files set status = 'analyzing', updated_at = now() where id = $1`, [
-    file.id,
-  ]);
-
-  const result = await invokeVision({
-    prompt:
-      `Cataloging photo "${file.original_name}". Describe only what is visible. ` +
-      `Do not name a brand, designer, model, person, or value unless the text is legibly ` +
-      `visible in the image. Uncertainty is an acceptable answer.`,
-    imageBase64: bytes.toString("base64"),
-    mime: file.mime,
-  });
-
-  if (!result.ok) {
-    await sql.query(
-      `update files set status = 'review', uncertainty = $2, failure_reason = $3, updated_at = now()
-       where id = $1`,
-      [
-        file.id,
-        "Not analyzed — the file is preserved and cataloged, but nothing was concluded about it.",
-        result.error,
-      ],
-    );
-    return (await getFile(sql, userId, file.id))!;
-  }
-
-  await recordUsage(sql, { userId, kind: "vision", costCents: result.costCents });
-
-  let parsed: Record<string, unknown> = {};
-  try {
-    const text = result.text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "");
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = { description: result.text.trim() };
-  }
-
-  const description = String(parsed.description ?? "").trim();
-  const confidence = Number(parsed.confidence ?? 0);
-  const uncertainReasons = Array.isArray(parsed.uncertain_reasons)
-    ? (parsed.uncertain_reasons as unknown[]).map(String).filter(Boolean)
-    : [];
-  const uncertain = uncertainReasons.length > 0 || (confidence > 0 && confidence < 0.5);
-
-  // A working name, from what was actually seen. The original name is a
-  // column of its own and is never overwritten.
-  const slug = description
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .split("-")
-    .filter(Boolean)
-    .slice(0, 6)
-    .join("-");
-  const workingName = slug ? `${slug}${extensionOf(file.original_name)}` : null;
-
-  await sql.query(
-    `update files
-       set status = $2, analysis_json = $3, working_name = $4, uncertainty = $5, updated_at = now()
-     where id = $1`,
-    [
-      file.id,
-      uncertain ? "review" : "cataloged",
-      JSON.stringify(parsed),
-      workingName,
-      uncertain ? uncertainReasons.join("; ") || "Low confidence on identity." : null,
-    ],
-  );
-
-  // What the agent concluded is recorded as inference, kept separate from
-  // anything Dayna said.
-  if (description) {
-    await writeContext(sql, {
-      userId,
-      kind: "agent_inference",
-      body: `Photo ${file.original_name}: ${description}`,
-      author: "role:34",
-      source: "photo_intake",
-      confidence: confidence || null,
-    });
-  }
-
-  return (await getFile(sql, userId, file.id))!;
-}
+// There is deliberately no generic image-analysis step here.
+//
+// A "describe this image" call against every upload is not a job. It produced
+// a sentence about each photo that belonged to no workflow, answered no
+// question Dayna had asked, and cost a model call per file to do it. The real
+// photo job — what gets looked for, on which photos, feeding what record — is
+// built out concretely before any of it runs. Until then a photo is preserved,
+// cataloged, and left alone.
 
 /** Extract text from a document we can read as text. PDFs stay preserved-only. */
 export async function extractDocumentText(
@@ -313,30 +224,4 @@ export async function extractDocumentText(
     [file.id, text],
   );
   return (await getFile(sql, userId, file.id))!;
-}
-
-/**
- * Start the workflow for this batch. The chain is the one Dayna chose — from
- * the page she is on, or by picking it. Nothing here infers what she meant.
- */
-export async function startBatchWorkflow(
-  sql: Sql,
-  opts: { userId: string; batchId: string; chainId: string; statement: string },
-): Promise<string> {
-  const started = await startChain(sql, {
-    userId: opts.userId,
-    chainId: opts.chainId,
-    requestStatement: opts.statement,
-    subjectKind: "batch",
-    subjectId: opts.batchId,
-  });
-  await sql.query(`update batches set workflow_id = $2 where id = $1`, [
-    opts.batchId,
-    started.workflowId,
-  ]);
-  await sql.query(`update files set workflow_id = $2 where batch_id = $1`, [
-    opts.batchId,
-    started.workflowId,
-  ]);
-  return started.workflowId;
 }
