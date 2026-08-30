@@ -1,20 +1,60 @@
 import { redactSecrets } from "./guardrails.ts";
 
-// Provider defaults target the Gemini OpenAI-compatible endpoint; both are
-// env-overridable so any OpenAI-compatible provider (Groq, OpenRouter, xAI)
-// can be swapped in without a code change.
+// Two ways to reach Gemini, picked by environment:
+//  - VERTEX_PROJECT set  -> Vertex AI (billed to the Google Cloud project /
+//    startup credits). Auth is the machine's own identity on Cloud Run
+//    (metadata server), or a GOOGLE_OAUTH_TOKEN env for local runs. No keys.
+//  - otherwise           -> the Gemini API keyed by GEMINI_API_KEY.
+// LLM_BASE_URL/LLM_MODEL/LLM_API_KEY still override for any OpenAI-compatible
+// provider.
 export const LLM_MODEL = process.env.LLM_MODEL?.trim() || "gemini-3.6-flash";
+const VERTEX_PROJECT = process.env.VERTEX_PROJECT?.trim();
 export const LLM_BASE = (
   process.env.LLM_BASE_URL?.trim() ||
-  "https://generativelanguage.googleapis.com/v1beta/openai"
+  (VERTEX_PROJECT
+    ? `https://aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/global/endpoints/openapi`
+    : "https://generativelanguage.googleapis.com/v1beta/openai")
 ).replace(/\/+$/, "");
+const WIRE_MODEL = VERTEX_PROJECT ? `google/${LLM_MODEL}` : LLM_MODEL;
 
 function resolveApiKey(): string | undefined {
   return (process.env.LLM_API_KEY || process.env.GEMINI_API_KEY)?.trim() || undefined;
 }
 
+let cachedToken: { value: string; expires: number } | null = null;
+async function vertexToken(): Promise<string | null> {
+  if (process.env.GOOGLE_OAUTH_TOKEN?.trim()) return process.env.GOOGLE_OAUTH_TOKEN.trim();
+  if (cachedToken && Date.now() < cachedToken.expires) return cachedToken.value;
+  try {
+    // Cloud Run / any GCP runtime: the service's own identity.
+    const res = await fetch(
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+      { headers: { "Metadata-Flavor": "Google" } },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as { access_token?: string; expires_in?: number };
+    if (!json.access_token) return null;
+    cachedToken = {
+      value: json.access_token,
+      expires: Date.now() + Math.max(60, (json.expires_in ?? 300) - 120) * 1000,
+    };
+    return cachedToken.value;
+  } catch {
+    return null;
+  }
+}
+
+async function authHeader(): Promise<string | null> {
+  if (VERTEX_PROJECT) {
+    const t = await vertexToken();
+    return t ? `Bearer ${t}` : null;
+  }
+  const key = resolveApiKey();
+  return key ? `Bearer ${key}` : null;
+}
+
 export function llmAvailable(): boolean {
-  return Boolean(resolveApiKey());
+  return Boolean(VERTEX_PROJECT || resolveApiKey());
 }
 
 export type LlmOk = {
@@ -45,8 +85,8 @@ export async function invokeLlm(opts: {
   maxTokens?: number;
   json?: boolean;
 }): Promise<LlmResult> {
-  const apiKey = resolveApiKey();
-  if (!apiKey) {
+  const auth = await authHeader();
+  if (!auth) {
     return {
       ok: false,
       code: "LLM_UNAVAILABLE",
@@ -58,7 +98,7 @@ export async function invokeLlm(opts: {
   const user = redactSecrets(opts.user);
   try {
     const body: Record<string, unknown> = {
-      model: LLM_MODEL,
+      model: WIRE_MODEL,
       max_tokens: opts.maxTokens ?? 900,
       temperature: 0.2,
       messages: [
@@ -71,10 +111,7 @@ export async function invokeLlm(opts: {
     }
     let res = await fetch(`${LLM_BASE}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: auth },
       body: JSON.stringify(body),
     });
     if (!res.ok && res.status === 400 && body.response_format) {
@@ -82,10 +119,7 @@ export async function invokeLlm(opts: {
       delete body.response_format;
       res = await fetch(`${LLM_BASE}/chat/completions`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: auth },
         body: JSON.stringify(body),
       });
     }
@@ -130,8 +164,8 @@ export async function invokeVision(opts: {
   imageBase64: string;
   mime: string;
 }): Promise<LlmResult> {
-  const apiKey = resolveApiKey();
-  if (!apiKey) {
+  const auth = await authHeader();
+  if (!auth) {
     return {
       ok: false,
       code: "LLM_UNAVAILABLE",
@@ -142,13 +176,10 @@ export async function invokeVision(opts: {
   try {
     const res = await fetch(`${LLM_BASE}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: auth },
       body: JSON.stringify({
-        model: LLM_MODEL,
-        max_tokens: 500,
+        model: WIRE_MODEL,
+        max_tokens: 800,
         temperature: 0.1,
         messages: [
           {
