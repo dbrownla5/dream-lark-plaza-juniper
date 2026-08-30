@@ -128,6 +128,7 @@ cd "$(dirname "$0")/.."
 gcloud run deploy "$SERVICE" \
   --source . --region "$REGION" --allow-unauthenticated \
   --network=default --subnet=default --vpc-egress=private-ranges-only \
+  --set-env-vars "VERTEX_PROJECT=$PROJECT_ID" \
   --set-secrets "GEMINI_API_KEY=gemini-api-key:latest,DATABASE_URL=database-url:latest" \
   --memory 512Mi --min-instances 0 --max-instances 3
 
