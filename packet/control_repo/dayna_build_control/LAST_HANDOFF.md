@@ -36,11 +36,20 @@ smokes, live LLM smokes, `/api/verify`, Playwright e2e (workflow-builder).
 ## Evidence
 `evidence/2026-08-29_rebuild_and_gemini.md`
 
+## DEPLOYED — the system is live (2026-08-30)
+URL: https://dayna-system-q5gi7fe4kq-uw.a.run.app
+Google Cloud project ferrous-gate-506203-f8 ("dbwlcjupiter"), all us-west1,
+billed to Dayna's startup credits ("My Billing Account"). Pieces: Cloud Run
+service dayna-system (Vertex identity — AI calls bill to credits, model
+google/gemini-3.6-flash; GEMINI_API_KEY secret kept as fallback), Cloud SQL
+Postgres dayna-system-db (private IP only, per org policy), seven zone
+buckets gs://ferrous-gate-506203-f8-{intake,originals,catalog,derivatives,
+outputs,review,archive} (originals versioned). Secrets in Secret Manager.
+Rebuild recipe: system/gcp/setup.sh (idempotent; one Google sign-in click).
+Live-verified post-deploy: page 200, real intake ran an occupation through
+Vertex, run recorded on the ledger in Cloud SQL (0.05¢).
+
 ## Next stage
-`system/` is the successor build on Dayna's chosen simple stack (Express +
-Vite/React + pg + Gemini, .env-driven). Verified live: /api/verify 30/30 on
-a fresh Postgres, real resale intake walked two chain steps in-scope, run
-ledger visible, production build green. Next: port photo/document intake +
-storage zones from the reference app into system/, wire real auth, deploy
-system/ remote (any node host + Supabase Postgres — needs DB password from
-Dayna), then merge Lotbook + workflow-builder capabilities behind it.
+Sign-in on the live URL (it is public until then — Dayna keeps the link
+private); photo/document intake into the zone buckets (then the 200GB corpus
+migration); merge Lotbook + workflow-builder capabilities behind the system.
