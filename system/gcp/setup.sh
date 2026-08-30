@@ -62,7 +62,8 @@ say "Billing linked"
 say "Enabling services (takes a minute the first time)"
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
   artifactregistry.googleapis.com storage.googleapis.com \
-  sqladmin.googleapis.com vision.googleapis.com secretmanager.googleapis.com
+  sqladmin.googleapis.com vision.googleapis.com secretmanager.googleapis.com \
+  servicenetworking.googleapis.com compute.googleapis.com
 
 # --- 4. Storage containers -------------------------------------------------
 for zone in "${BUCKET_ZONES[@]}"; do
@@ -76,12 +77,23 @@ done
 gcloud storage buckets update "gs://${PROJECT_ID}-originals" --versioning || true
 say "Storage containers ready"
 
-# --- 5. Database -----------------------------------------------------------
+# --- 5. Database (private IP only — org policy forbids public DB addresses) --
+if ! gcloud compute addresses describe google-managed-services-default --global >/dev/null 2>&1; then
+  say "Reserving private service range for the database network"
+  gcloud compute addresses create google-managed-services-default \
+    --global --purpose=VPC_PEERING --prefix-length=16 --network=default
+fi
+if ! gcloud services vpc-peerings list --network=default 2>/dev/null | grep -q servicenetworking; then
+  say "Connecting private service access"
+  gcloud services vpc-peerings connect --service=servicenetworking.googleapis.com \
+    --ranges=google-managed-services-default --network=default
+fi
 if ! gcloud sql instances describe "$DB_INSTANCE" >/dev/null 2>&1; then
-  say "Creating Postgres instance (smallest tier; ~minutes to provision)"
+  say "Creating Postgres instance (private IP, smallest tier; ~minutes to provision)"
   gcloud sql instances create "$DB_INSTANCE" \
-    --database-version=POSTGRES_16 --tier=db-f1-micro --region="$REGION" \
-    --storage-size=10GB --storage-auto-increase
+    --database-version=POSTGRES_16 --edition=enterprise --tier=db-g1-small \
+    --region="$REGION" --storage-size=10GB --storage-auto-increase \
+    --no-assign-ip --network=projects/$PROJECT_ID/global/networks/default
 fi
 gcloud sql databases create "$DB_NAME" --instance="$DB_INSTANCE" 2>/dev/null || true
 DB_PASS_FILE="$HOME/.dayna-system-db-pass"
@@ -91,9 +103,9 @@ if [ ! -f "$DB_PASS_FILE" ]; then
   gcloud sql users create "$DB_USER" --instance="$DB_INSTANCE" --password="$(cat "$DB_PASS_FILE")" \
     || gcloud sql users set-password "$DB_USER" --instance="$DB_INSTANCE" --password="$(cat "$DB_PASS_FILE")"
 fi
-DB_CONN=$(gcloud sql instances describe "$DB_INSTANCE" --format='value(connectionName)')
-DATABASE_URL="postgresql://${DB_USER}:$(cat "$DB_PASS_FILE")@localhost/${DB_NAME}?host=/cloudsql/${DB_CONN}"
-say "Database ready"
+DB_IP=$(gcloud sql instances describe "$DB_INSTANCE" --format='value(ipAddresses[].ipAddress)' | tr ';' '\n' | head -1)
+DATABASE_URL="postgresql://${DB_USER}:$(cat "$DB_PASS_FILE")@${DB_IP}:5432/${DB_NAME}"
+say "Database ready (private address $DB_IP)"
 
 # --- 6. Secrets ------------------------------------------------------------
 if [ -z "${GEMINI_API_KEY:-}" ]; then
@@ -115,7 +127,7 @@ say "Building and deploying to Cloud Run (first build takes a few minutes)"
 cd "$(dirname "$0")/.."
 gcloud run deploy "$SERVICE" \
   --source . --region "$REGION" --allow-unauthenticated \
-  --add-cloudsql-instances "$DB_CONN" \
+  --network=default --subnet=default --vpc-egress=private-ranges-only \
   --set-secrets "GEMINI_API_KEY=gemini-api-key:latest,DATABASE_URL=database-url:latest" \
   --memory 512Mi --min-instances 0 --max-instances 3
 
