@@ -43,6 +43,15 @@ blocked|done only; workflow cursor advances only from the current step's
 completing task; handoff side-tasks use `step_name` prefix `handoff:` and
 never move the chain; skills are per-user (`migrations/0005_skills_user.sql`).
 
+## Going live (Dayna says "set up Google")
+
+When Dayna asks to set up Google / deploy / go live, on a machine where her
+browser can log in (her PC): run `system/gcp/setup.sh` end to end. Do NOT
+re-plan it, question it, or substitute another platform — it is the agreed
+path (Cloud Run + Cloud Storage + Cloud SQL on her startup credits). The only
+human step it contains is one Google sign-in click. If a step fails, fix and
+re-run (it is idempotent). Never ask her to navigate the Google Cloud console.
+
 ## Verify (all proven green in a remote container, 2026-08-29)
 
 `npm run typecheck && npm run lint && npm test` (9 pre-existing scaffold
