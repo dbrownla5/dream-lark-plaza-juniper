@@ -1,10 +1,20 @@
 import { redactSecrets } from "./guardrails.ts";
 
-export const LLM_MODEL = "grok-4.5";
-export const LLM_BASE = "https://api.x.ai/v1";
+// Provider defaults target the Gemini OpenAI-compatible endpoint; both are
+// env-overridable so any OpenAI-compatible provider (Groq, OpenRouter, xAI)
+// can be swapped in without a code change.
+export const LLM_MODEL = process.env.LLM_MODEL?.trim() || "gemini-3.6-flash";
+export const LLM_BASE = (
+  process.env.LLM_BASE_URL?.trim() ||
+  "https://generativelanguage.googleapis.com/v1beta/openai"
+).replace(/\/+$/, "");
+
+function resolveApiKey(): string | undefined {
+  return (process.env.LLM_API_KEY || process.env.GEMINI_API_KEY)?.trim() || undefined;
+}
 
 export function llmAvailable(): boolean {
-  return Boolean(process.env.XAI_API_KEY?.trim());
+  return Boolean(resolveApiKey());
 }
 
 export type LlmOk = {
@@ -35,7 +45,7 @@ export async function invokeLlm(opts: {
   maxTokens?: number;
   json?: boolean;
 }): Promise<LlmResult> {
-  const apiKey = process.env.XAI_API_KEY?.trim();
+  const apiKey = resolveApiKey();
   if (!apiKey) {
     return {
       ok: false,
@@ -59,7 +69,7 @@ export async function invokeLlm(opts: {
     if (opts.json) {
       body.response_format = { type: "json_object" };
     }
-    const res = await fetch(`${LLM_BASE}/chat/completions`, {
+    let res = await fetch(`${LLM_BASE}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -67,12 +77,24 @@ export async function invokeLlm(opts: {
       },
       body: JSON.stringify(body),
     });
+    if (!res.ok && res.status === 400 && body.response_format) {
+      // Some OpenAI-compatible layers reject response_format; retry without it.
+      delete body.response_format;
+      res = await fetch(`${LLM_BASE}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       return {
         ok: false,
         code: "LLM_ERROR",
-        error: `xAI API error ${res.status}: ${body.slice(0, 400)}`,
+        error: `LLM API error ${res.status}: ${body.slice(0, 400)}`,
       };
     }
     const json = (await res.json()) as {
@@ -108,7 +130,7 @@ export async function invokeVision(opts: {
   imageBase64: string;
   mime: string;
 }): Promise<LlmResult> {
-  const apiKey = process.env.XAI_API_KEY?.trim();
+  const apiKey = resolveApiKey();
   if (!apiKey) {
     return {
       ok: false,
@@ -154,7 +176,7 @@ export async function invokeVision(opts: {
       return {
         ok: false,
         code: "LLM_ERROR",
-        error: `xAI vision error ${res.status}: ${body.slice(0, 400)}`,
+        error: `LLM vision error ${res.status}: ${body.slice(0, 400)}`,
       };
     }
     const json = (await res.json()) as {

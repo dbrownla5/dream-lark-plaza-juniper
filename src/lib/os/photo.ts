@@ -100,8 +100,8 @@ export async function ingestPhotoBatch(
     let analysisModel: string | null = null;
     let analysisConfidence: number | null = null;
     let reviewState = "none";
-    let purposeCandidate = opts.purpose ?? null;
-    let purposeConfidence = opts.purpose ? 0.4 : null;
+    const purposeCandidate = opts.purpose ?? null;
+    const purposeConfidence = opts.purpose ? 0.4 : null;
 
     if (llmAvailable() && file.mime.startsWith("image/")) {
       const vision = await invokeVision({
@@ -239,6 +239,7 @@ export async function ingestPhotoBatch(
       ? `Resale intake from photo batch ${batchId}`
       : `Media custody for batch ${batchId}`,
     subjectId: batchId,
+    subjectKind: "media_batch",
     isTestOnly: opts.isTestOnly,
     packageId: pkg.id,
     input: { batchId, originalIds, assetCount: assets.length },

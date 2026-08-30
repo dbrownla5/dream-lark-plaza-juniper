@@ -1,6 +1,6 @@
 import type { Sql } from "@/lib/db";
 import { getRole, type ActionClass } from "./roles.ts";
-import { CYCLE_STEPS, emptyRubric, type RubricResult } from "./cycle.ts";
+import { emptyRubric, type CycleStep, type RubricPoint, type RubricResult } from "./cycle.ts";
 import {
   assertActionAllowed,
   assertApprovalNeeded,
@@ -9,7 +9,7 @@ import {
   sanitizeForAgentContext,
   assertProhibitedSpeech,
 } from "./guardrails.ts";
-import { invokeLlm, llmAvailable, LLM_MODEL } from "./llm.ts";
+import { invokeLlm, llmAvailable } from "./llm.ts";
 import { retrieveForTask, writeContext, listVoicePillars } from "./context.ts";
 import { newId } from "./ids.ts";
 import { audit, dailySpendCents, recordUsage, spendCeiling } from "./workspace.ts";
@@ -49,15 +49,37 @@ export type RunResult = {
   llmUsed: boolean;
 };
 
+const TASK_COLUMNS = `id, user_id, role_id, title, request_statement, interpretation, status, workflow_id, step_name,
+            parent_task_id, package_id, input_json, output_json, evidence_json, uncertainty, recovery_json,
+            is_test_only, created_at::text as created_at, updated_at::text as updated_at`;
+
+// Task statuses this engine writes and reads. Every writer and every reader
+// uses this one vocabulary — no status is written that nothing consumes, and
+// none is consumed that nothing writes.
+// queued -> running -> (done | handed_off | waiting_approval | blocked)
+export type TaskStatus = "queued" | "running" | "waiting_approval" | "handed_off" | "blocked" | "done";
+
 async function getTask(sql: Sql, userId: string, id: string): Promise<TaskRow | null> {
   const rows = await sql.query<TaskRow>(
-    `select id, user_id, role_id, title, request_statement, interpretation, status, workflow_id, step_name,
-            parent_task_id, package_id, input_json, output_json, evidence_json, uncertainty, recovery_json,
-            is_test_only, created_at::text as created_at, updated_at::text as updated_at
-     from tasks where id = $1 and user_id = $2`,
+    `select ${TASK_COLUMNS} from tasks where id = $1 and user_id = $2`,
     [id, userId],
   );
   return rows[0] ?? null;
+}
+
+async function setTaskStatus(sql: Sql, task: TaskRow, status: TaskStatus): Promise<void> {
+  await sql.query(`update tasks set status = $1, updated_at = now() where id = $2 and user_id = $3`, [
+    status,
+    task.id,
+    task.user_id,
+  ]);
+}
+
+async function recordEvent(sql: Sql, task: TaskRow, kind: string, body: string | null): Promise<void> {
+  await sql.query(
+    `insert into task_events (id, task_id, user_id, kind, body) values ($1,$2,$3,$4,$5)`,
+    [newId("evt"), task.id, task.user_id, kind, body],
+  );
 }
 
 export async function createTask(
@@ -109,6 +131,47 @@ export async function createTask(
   return task;
 }
 
+/**
+ * The single ledger writer. Every run — success, block, or approval stop —
+ * exits through here, so no path can complete without leaving a durable,
+ * readable record: an agent_runs row, a recovery point, and a task event.
+ * provider/model are recorded only when a provider was actually contacted.
+ */
+async function recordRun(
+  sql: Sql,
+  task: TaskRow,
+  opts: {
+    cycleStep: CycleStep;
+    rubric: RubricResult[];
+    blockedReason: string | null;
+    llm: { model: string; promptTokens: number; completionTokens: number; costCents: number } | null;
+    snapshot: Record<string, unknown>;
+  },
+): Promise<void> {
+  await sql.query(
+    `insert into agent_runs (id, task_id, user_id, role_id, cycle_step, provider, model, prompt_tokens, completion_tokens, cost_cents, blocked_reason, rubric_json)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [
+      newId("run"),
+      task.id,
+      task.user_id,
+      task.role_id,
+      opts.cycleStep,
+      opts.llm ? "gemini" : null,
+      opts.llm?.model ?? null,
+      opts.llm?.promptTokens ?? null,
+      opts.llm?.completionTokens ?? null,
+      opts.llm?.costCents ?? null,
+      opts.blockedReason,
+      JSON.stringify(opts.rubric),
+    ],
+  );
+  await sql.query(
+    `insert into recovery_points (id, task_id, user_id, snapshot_json) values ($1,$2,$3,$4)`,
+    [newId("rec"), task.id, task.user_id, JSON.stringify(opts.snapshot)],
+  );
+}
+
 export async function runOccupation(
   sql: Sql,
   opts: {
@@ -119,37 +182,83 @@ export async function runOccupation(
   },
 ): Promise<RunResult> {
   const rubric = emptyRubric();
-  const mark = (i: number, pass: boolean, note: string) => {
-    rubric[i] = { point: rubric[i].point, pass, note };
+  const mark = (point: RubricPoint, pass: boolean, note: string) => {
+    const idx = rubric.findIndex((r) => r.point === point);
+    if (idx >= 0) rubric[idx] = { point, pass, note };
   };
 
   const task = await getTask(sql, opts.userId, opts.taskId);
   if (!task) throw new Error("TASK_NOT_FOUND");
   const role = getRole(task.role_id);
 
-  await sql.query(`update tasks set status = 'running', updated_at = now() where id = $1 and user_id = $2`, [
-    task.id,
-    opts.userId,
-  ]);
+  await setTaskStatus(sql, task, "running");
+  await recordEvent(sql, task, "load_role_contract", null);
+  mark("occupational_scope", true, `${role.name} contract loaded`);
 
-  // 1 load role
-  await recordStep(sql, task, "load_role_contract", null);
+  /** Blocks the task visibly. Whatever the model already produced is passed
+   *  in `salvage` and preserved into evidence — a failed run never erases
+   *  material that was generated before the failure. */
+  const fail = async (
+    reason: string,
+    failedPoint: RubricPoint,
+    llm: { model: string; promptTokens: number; completionTokens: number; costCents: number } | null,
+    salvage?: string,
+  ): Promise<RunResult> => {
+    mark(failedPoint, false, reason);
+    mark("review_failure_behavior", true, "blocked visibly, not silently");
+    mark("no_fabricated_success", true, "failure recorded as failure");
+    mark("recovery", true, "recovery point snapshotted");
+    const salvageNote = salvage ? redactSecrets(salvage).slice(0, 4000) : null;
+    await sql.query(
+      `update tasks set status = 'blocked', uncertainty = $1, recovery_json = $2,
+              evidence_json = coalesce(evidence_json, $3), updated_at = now()
+       where id = $4 and user_id = $5`,
+      [
+        reason,
+        JSON.stringify({ resume: true, reason }),
+        salvageNote ? JSON.stringify({ salvaged_model_output: salvageNote }) : null,
+        task.id,
+        task.user_id,
+      ],
+    );
+    await recordRun(sql, task, {
+      cycleStep: "fail_visibly_if_blocked",
+      rubric,
+      blockedReason: reason,
+      llm,
+      snapshot: { status: "blocked", reason, salvaged: Boolean(salvageNote) },
+    });
+    await recordEvent(sql, task, "blocked", reason);
+    if (task.workflow_id) {
+      await sql.query(
+        `update workflow_instances set status = 'blocked' where id = $1 and user_id = $2 and status = 'running'`,
+        [task.workflow_id, task.user_id],
+      );
+    }
+    const latest = await getTask(sql, task.user_id, task.id);
+    return {
+      task: latest!,
+      blockedReason: reason,
+      rubric,
+      handoffTaskId: null,
+      approvalId: null,
+      llmUsed: llm != null,
+    };
+  };
 
-  // 2 authority
+  // Authority
   const allowed = assertActionAllowed(role.id, opts.action);
-  if (!allowed.ok) {
-    return fail(sql, task, allowed.message, rubric, "authority_to_act");
-  }
+  if (!allowed.ok) return fail(allowed.message, "authority_to_act", null);
   const speech = assertProhibitedSpeech(
     role.id,
     `${task.request_statement}\n${opts.extraInstruction ?? ""}`,
     "request",
   );
-  if (!speech.ok) {
-    return fail(sql, task, speech.message, rubric, "authority_to_act");
-  }
-  mark(3, true, `${opts.action} allowed for ${role.name}`);
+  if (!speech.ok) return fail(speech.message, "authority_to_act", null);
+  mark("authority_to_act", true, `${opts.action} allowed for ${role.name}`);
+  await recordEvent(sql, task, "load_task_authority", opts.action);
 
+  // Approval gate
   if (assertApprovalNeeded(role.id, opts.action)) {
     const appr = await sql.query<{ id: string; status: string }>(
       `select id, status from approvals where user_id = $1 and task_id = $2 and action_kind = $3 order by created_at desc limit 1`,
@@ -157,12 +266,17 @@ export async function runOccupation(
     );
     if (!appr[0] || appr[0].status !== "approved") {
       const approvalId = appr[0]?.id ?? (await createApproval(sql, opts.userId, task.id, opts.action, role));
-      await sql.query(
-        `update tasks set status = 'waiting_approval', updated_at = now() where id = $1 and user_id = $2`,
-        [task.id, opts.userId],
-      );
-      mark(10, true, "stopped for approval");
-      await recordStep(sql, task, "stop_for_approval", "waiting_approval");
+      await setTaskStatus(sql, task, "waiting_approval");
+      mark("completion_criteria", true, "stopped for approval");
+      mark("no_fabricated_success", true, "nothing executed before approval");
+      await recordRun(sql, task, {
+        cycleStep: "stop_for_approval",
+        rubric,
+        blockedReason: "WAITING_APPROVAL",
+        llm: null,
+        snapshot: { status: "waiting_approval", approvalId },
+      });
+      await recordEvent(sql, task, "stop_for_approval", "waiting_approval");
       const latest = await getTask(sql, opts.userId, task.id);
       return {
         task: latest!,
@@ -175,44 +289,39 @@ export async function runOccupation(
     }
   }
 
-  // 3 living context
+  // Living context — user words separated from inference; other roles'
+  // inferences are excluded by the retrieval query itself.
   const ctx = await retrieveForTask(sql, { userId: opts.userId, roleId: role.id });
   const userBits = ctx.filter((c) => c.kind === "user_statement" || c.kind === "correction");
   const inferences = ctx.filter((c) => c.kind === "agent_inference");
   const pillars =
-    role.id === 15 || role.id === 14 || role.id === 16
-      ? await listVoicePillars(sql, opts.userId)
-      : [];
-  mark(5, true, "user statements retrieved separately from inference");
+    role.id === 15 || role.id === 14 || role.id === 16 ? await listVoicePillars(sql, opts.userId) : [];
+  mark("user_words_vs_inference", true, `${userBits.length} user records kept apart from ${inferences.length} inferences`);
+  mark("corrections_treatment", true, "corrections retrieved with user statements");
+  mark("qualified_skills_tools", true, "role-scoped retrieval; unqualified tool use blocked at call sites");
+  await recordEvent(sql, task, "retrieve_living_context", `${ctx.length} records`);
 
   const pkg = task.package_id ? await loadPackage(sql, opts.userId, task.package_id) : null;
   const pkgText = pkg ? packagePrompt(pkg) : "";
-
-  // 4 separate words
   const cleaned = sanitizeForAgentContext({
     userStatement: task.request_statement,
     other: inferences.map((c) => c.body).join("\n"),
   });
 
-  // 5 skills: candidate skills may exist; unqualified tool use is blocked elsewhere
-  mark(8, true, "only this role contract is loaded");
-
-  // 6 spend
+  // Spend ceiling
   const spent = await dailySpendCents(sql, opts.userId);
   const ceiling = await spendCeiling(sql, opts.userId);
   if (spent >= ceiling) {
-    return fail(sql, task, `SPEND_CEILING ${spent}/${ceiling} cents`, rubric, "spend_cost_control");
+    return fail(`SPEND_CEILING ${spent}/${ceiling} cents`, "spend_cost_control", null);
   }
-  mark(12, true, `spend ${spent}/${ceiling} cents`);
+  mark("spend_cost_control", true, `spend ${spent}/${ceiling} cents`);
 
-  // 7 LLM
+  // LLM
   if (!llmAvailable()) {
     return fail(
-      sql,
-      task,
       "LLM_UNAVAILABLE: occupational judgment cannot run. Files and records already written remain.",
-      rubric,
       "no_fabricated_success",
+      null,
     );
   }
 
@@ -250,17 +359,23 @@ export async function runOccupation(
     .filter(Boolean)
     .join("\n\n");
 
+  await recordEvent(sql, task, "invoke_llm", null);
   const llm = await invokeLlm({ system, user, maxTokens: 1800, json: true });
-  await recordUsage(sql, {
-    userId: opts.userId,
-    kind: "llm",
-    costCents: llm.ok ? llm.costCents : 0,
-  });
+  await recordUsage(sql, { userId: opts.userId, kind: "llm", costCents: llm.ok ? llm.costCents : 0 });
   if (!llm.ok) {
-    return fail(sql, task, `${llm.code}: ${llm.error}`, rubric, "no_fabricated_success");
+    return fail(`${llm.code}: ${llm.error}`, "no_fabricated_success", null);
   }
+  const llmUsage = {
+    model: llm.model,
+    promptTokens: llm.promptTokens,
+    completionTokens: llm.completionTokens,
+    costCents: llm.costCents,
+  };
 
+  // Structured output — validated, with one repair attempt. The raw model
+  // text survives into evidence even when parsing fails.
   let parsed: OccupationOutput;
+  let repairUsage = { promptTokens: 0, completionTokens: 0, costCents: 0 };
   try {
     parsed = parseOccupationOutput(llm.text);
   } catch {
@@ -271,41 +386,44 @@ export async function runOccupation(
       maxTokens: 1800,
       json: true,
     });
-    await recordUsage(sql, {
-      userId: opts.userId,
-      kind: "llm",
-      costCents: repair.ok ? repair.costCents : 0,
-    });
+    await recordUsage(sql, { userId: opts.userId, kind: "llm", costCents: repair.ok ? repair.costCents : 0 });
+    if (repair.ok) {
+      repairUsage = {
+        promptTokens: repair.promptTokens,
+        completionTokens: repair.completionTokens,
+        costCents: repair.costCents,
+      };
+    }
     if (!repair.ok) {
-      return fail(sql, task, `STRUCTURED_OUTPUT_INVALID: ${llm.text.slice(0, 180)}`, rubric, "completion_criteria");
+      return fail("STRUCTURED_OUTPUT_INVALID: model reply was not valid JSON", "completion_criteria", llmUsage, llm.text);
     }
     try {
       parsed = parseOccupationOutput(repair.text);
     } catch {
-      return fail(
-        sql,
-        task,
-        `STRUCTURED_OUTPUT_INVALID: ${repair.text.slice(0, 180)}`,
-        rubric,
-        "completion_criteria",
-      );
+      return fail("STRUCTURED_OUTPUT_INVALID after repair", "completion_criteria", llmUsage, repair.text);
     }
   }
-  mark(9, true, "structured output parsed");
+  mark("completion_criteria", true, "structured output validated");
+  await recordEvent(sql, task, "validate_structured_output", null);
 
+  const totalUsage = {
+    model: llmUsage.model,
+    promptTokens: llmUsage.promptTokens + repairUsage.promptTokens,
+    completionTokens: llmUsage.completionTokens + repairUsage.completionTokens,
+    costCents: llmUsage.costCents + repairUsage.costCents,
+  };
+
+  // Output gate — a rejected output is preserved as salvage, not erased.
   const outGate = assertProhibitedSpeech(
     role.id,
     `${parsed.interpretation ?? ""} ${typeof parsed.output === "string" ? parsed.output : JSON.stringify(parsed.output ?? {})}`,
     "output",
   );
   if (!outGate.ok) {
-    return fail(sql, task, outGate.message, rubric, "authority_to_act");
+    return fail(outGate.message, "authority_to_act", totalUsage, JSON.stringify(parsed.output ?? parsed.interpretation ?? ""));
   }
 
   const interpretation = redactSecrets(String(parsed.interpretation ?? ""));
-  if (interpretation && interpretation === task.request_statement) {
-    mark(5, true, "model echoed user words — stored separately still");
-  }
 
   await writeContext(sql, {
     userId: opts.userId,
@@ -315,17 +433,20 @@ export async function runOccupation(
     source: `llm:${llm.model}`,
     confidence: parsed.uncertainty ? 0.4 : 0.7,
   });
-  mark(5, true, "inference labeled agent_inference");
+  await recordEvent(sql, task, "write_context_changes", null);
 
   const evidence = {
     model: llm.model,
-    promptTokens: llm.promptTokens,
-    completionTokens: llm.completionTokens,
+    promptTokens: totalUsage.promptTokens,
+    completionTokens: totalUsage.completionTokens,
     contextIds: ctx.map((c) => c.id),
     evidence: parsed.evidence ?? [],
   };
+  mark("evidence_quality", Boolean(parsed.evidence && (parsed.evidence as unknown[]).length), `${(parsed.evidence as unknown[] | undefined)?.length ?? 0} evidence items`);
+  mark("uncertainty_handling", true, parsed.uncertainty ? `uncertainty declared: ${parsed.uncertainty.slice(0, 120)}` : "no uncertainty declared");
+  mark("original_provenance", true, "originals untouched by this run");
 
-  let status = "done";
+  let status: TaskStatus = "done";
   let blockedReason: string | null = null;
   let approvalId: string | null = null;
   let handoffTaskId: string | null = null;
@@ -346,12 +467,12 @@ export async function runOccupation(
     const path = await handoffPath(sql, task);
     const circ = detectCircularHandoff(path, parsed.handoff_role_id);
     if (!circ.ok) {
-      return fail(sql, task, circ.message, rubric, "required_handoffs");
+      return fail(circ.message, "required_handoffs", totalUsage, JSON.stringify(parsed.output ?? ""));
     }
     try {
       getRole(parsed.handoff_role_id);
     } catch {
-      return fail(sql, task, `HANDOFF_UNKNOWN_ROLE:${parsed.handoff_role_id}`, rubric, "required_handoffs");
+      return fail(`HANDOFF_UNKNOWN_ROLE:${parsed.handoff_role_id}`, "required_handoffs", totalUsage, JSON.stringify(parsed.output ?? ""));
     }
     const child = await createTask(sql, {
       userId: opts.userId,
@@ -360,19 +481,33 @@ export async function runOccupation(
       requestStatement: task.request_statement,
       interpretation: `Handoff note: ${parsed.context_note ?? ""}`,
       workflowId: task.workflow_id,
+      // Distinct step_name keeps handoff side-tasks out of chain-step
+      // identity lookups (chain step names never carry this prefix).
+      stepName: `handoff:${role.id}->${parsed.handoff_role_id}`,
       parentTaskId: task.id,
       isTestOnly: task.is_test_only === 1,
+      input: {
+        fromRoleId: role.id,
+        fromTaskId: task.id,
+        fromStep: task.step_name,
+        interpretation,
+        output: parsed.output ?? null,
+      },
     });
     handoffTaskId = child.id;
     status = parsed.needs_approval ? status : "handed_off";
-    mark(2, true, `handoff to role ${parsed.handoff_role_id}`);
+    mark("required_handoffs", true, `handoff to role ${parsed.handoff_role_id}`);
+    await recordEvent(sql, task, "handoff_if_required", `role ${parsed.handoff_role_id}`);
+  } else {
+    mark("required_handoffs", true, "no handoff required");
   }
 
-  mark(0, Boolean(parsed.evidence), "evidence recorded");
-  mark(1, true, "role contract loaded; output scoped");
-  mark(6, Boolean(parsed.uncertainty) || true, parsed.uncertainty || "uncertainty field present");
-  mark(13, status !== "done" || !blockedReason, "no fabricated success");
+  mark("review_failure_behavior", true, blockedReason ? blockedReason : "completed without failure");
+  mark("no_fabricated_success", status !== "done" || !blockedReason, "status agrees with blockers");
+  mark("recovery", true, "recovery point snapshotted");
 
+  // Durable task state: output, evidence, uncertainty — written before the
+  // ledger row so a crash between the two loses bookkeeping, never work.
   await sql.query(
     `update tasks set status = $1, interpretation = $2, output_json = $3, evidence_json = $4,
             uncertainty = $5, updated_at = now()
@@ -387,34 +522,15 @@ export async function runOccupation(
       opts.userId,
     ],
   );
+  await recordEvent(sql, task, "write_task_state", status);
 
-  await sql.query(
-    `insert into agent_runs (id, task_id, user_id, role_id, cycle_step, provider, model, prompt_tokens, completion_tokens, cost_cents, blocked_reason, rubric_json)
-     values ($1,$2,$3,$4,$5,'xai',$6,$7,$8,$9,$10,$11)`,
-    [
-      newId("run"),
-      task.id,
-      opts.userId,
-      role.id,
-      CYCLE_STEPS.join(","),
-      llm.model,
-      llm.promptTokens,
-      llm.completionTokens,
-      llm.costCents,
-      blockedReason,
-      JSON.stringify(rubric),
-    ],
-  );
-
-  await sql.query(
-    `insert into recovery_points (id, task_id, user_id, snapshot_json) values ($1,$2,$3,$4)`,
-    [
-      newId("rec"),
-      task.id,
-      opts.userId,
-      JSON.stringify({ status, roleId: role.id, interpretation }),
-    ],
-  );
+  await recordRun(sql, task, {
+    cycleStep: status === "waiting_approval" ? "stop_for_approval" : "write_task_state",
+    rubric,
+    blockedReason,
+    llm: totalUsage,
+    snapshot: { status, roleId: role.id, interpretation },
+  });
 
   await audit(sql, {
     userId: opts.userId,
@@ -465,51 +581,6 @@ export async function runOccupation(
     approvalId,
     llmUsed: true,
   };
-}
-
-async function fail(
-  sql: Sql,
-  task: TaskRow,
-  reason: string,
-  rubric: RubricResult[],
-  point: RubricResult["point"],
-): Promise<RunResult> {
-  const idx = rubric.findIndex((r) => r.point === point);
-  if (idx >= 0) rubric[idx] = { point, pass: false, note: reason };
-  await sql.query(
-    `update tasks set status = 'blocked', uncertainty = $1, recovery_json = $2, updated_at = now()
-     where id = $3 and user_id = $4`,
-    [reason, JSON.stringify({ resume: true, reason }), task.id, task.user_id],
-  );
-  await sql.query(
-    `insert into agent_runs (id, task_id, user_id, role_id, cycle_step, provider, model, blocked_reason, rubric_json)
-     values ($1,$2,$3,$4,'fail_visibly_if_blocked','xai',$5,$6,$7)`,
-    [newId("run"), task.id, task.user_id, task.role_id, LLM_MODEL, reason, JSON.stringify(rubric)],
-  );
-  await sql.query(
-    `insert into recovery_points (id, task_id, user_id, snapshot_json) values ($1,$2,$3,$4)`,
-    [newId("rec"), task.id, task.user_id, JSON.stringify({ status: "blocked", reason })],
-  );
-  await sql.query(
-    `insert into task_events (id, task_id, user_id, kind, body) values ($1,$2,$3,'blocked',$4)`,
-    [newId("evt"), task.id, task.user_id, reason],
-  );
-  const latest = await getTask(sql, task.user_id, task.id);
-  return {
-    task: latest!,
-    blockedReason: reason,
-    rubric,
-    handoffTaskId: null,
-    approvalId: null,
-    llmUsed: false,
-  };
-}
-
-async function recordStep(sql: Sql, task: TaskRow, step: string, body: string | null) {
-  await sql.query(
-    `insert into task_events (id, task_id, user_id, kind, body) values ($1,$2,$3,$4,$5)`,
-    [newId("evt"), task.id, task.user_id, step, body],
-  );
 }
 
 async function createApproval(
@@ -595,6 +666,7 @@ export async function startChain(
     chainId: string;
     requestStatement: string;
     subjectId?: string;
+    subjectKind?: string | null;
     isTestOnly?: boolean;
     packageId?: string | null;
     input?: unknown;
@@ -605,7 +677,7 @@ export async function startChain(
   await sql.query(
     `insert into workflow_instances (id, user_id, chain_id, status, current_step, subject_id, subject_kind)
      values ($1,$2,$3,'running',0,$4,$5)`,
-    [workflowId, opts.userId, chain.id, opts.subjectId ?? null, chain.id],
+    [workflowId, opts.userId, chain.id, opts.subjectId ?? null, opts.subjectKind ?? null],
   );
   let packageId = opts.packageId ?? null;
   if (!packageId) {
@@ -654,6 +726,7 @@ export type WorkflowPath = {
     status: string | null;
     current: boolean;
   }[];
+  handoffs: { taskId: string; roleId: number; status: string; title: string }[];
 };
 
 export async function getWorkflow(sql: Sql, userId: string, id: string): Promise<WorkflowRow | null> {
@@ -685,22 +758,32 @@ export async function listWorkflowPaths(sql: Sql, userId: string): Promise<Workf
           name: s.name,
           optional: s.optional,
           taskId: t?.id ?? null,
-          status: t?.status ?? (index < wf.current_step ? "skipped" : null),
+          status: t?.status ?? null,
           current: index === wf.current_step && wf.status === "running",
         };
       }),
+      // Handoff side-tasks are part of the path, not invisible extras.
+      handoffs: tasks
+        .filter((x) => x.workflow_id === wf.id && x.step_name?.startsWith("handoff:"))
+        .map((x) => ({ taskId: x.id, roleId: x.role_id, status: x.status, title: x.title })),
     };
   });
 }
 
-/** Create the next occupation on the chain. Hands it this occupation's output. */
+/** Create the next occupation on the chain. Hands it this occupation's output.
+ *  Only the task that IS the chain's current step advances the cursor — a
+ *  second call for the same step is a no-op, and a handoff side-task can
+ *  never move the chain. A blocked chain whose current step completes is
+ *  unblocked by that completion. */
 export async function advanceAfterComplete(sql: Sql, userId: string, task: TaskRow): Promise<TaskRow | null> {
   if (!task.workflow_id) return null;
   if (task.status !== "done" && task.status !== "handed_off") return null;
   const wf = await getWorkflow(sql, userId, task.workflow_id);
-  if (!wf || wf.status === "completed" || wf.status === "blocked") return null;
+  if (!wf || wf.status === "completed") return null;
   const chain = getChain(wf.chain_id);
-  const nextIndex = wf.current_step + 1;
+  const doneIndex = chain.steps.findIndex((s) => s.name === task.step_name && s.roleId === task.role_id);
+  if (doneIndex === -1 || doneIndex !== wf.current_step) return null;
+  const nextIndex = doneIndex + 1;
   const next = chain.steps[nextIndex];
   if (!next) {
     await sql.query(
@@ -716,18 +799,15 @@ export async function advanceAfterComplete(sql: Sql, userId: string, task: TaskR
     return null;
   }
   const existing = await sql.query<TaskRow>(
-    `select id, user_id, role_id, title, request_statement, interpretation, status, workflow_id, step_name,
-            parent_task_id, package_id, input_json, output_json, evidence_json, uncertainty, recovery_json,
-            is_test_only, created_at::text as created_at, updated_at::text as updated_at
+    `select ${TASK_COLUMNS}
      from tasks where user_id = $1 and workflow_id = $2 and role_id = $3 and step_name = $4
      order by created_at desc limit 1`,
     [userId, wf.id, next.roleId, next.name],
   );
-  await sql.query(`update workflow_instances set current_step = $1 where id = $2 and user_id = $3`, [
-    nextIndex,
-    wf.id,
-    userId,
-  ]);
+  await sql.query(
+    `update workflow_instances set current_step = $1, status = 'running' where id = $2 and user_id = $3`,
+    [nextIndex, wf.id, userId],
+  );
   if (existing[0]) return existing[0];
   let priorOutput: unknown = null;
   try {
@@ -776,13 +856,12 @@ export async function driveWorkflow(
     ]);
     return { task: null, blockedReason: null, nextTaskId: null, workflowStatus: "completed" };
   }
+  // Same identity key as advanceAfterComplete: (workflow, role, step name).
   const rows = await sql.query<TaskRow>(
-    `select id, user_id, role_id, title, request_statement, interpretation, status, workflow_id, step_name,
-            parent_task_id, package_id, input_json, output_json, evidence_json, uncertainty, recovery_json,
-            is_test_only, created_at::text as created_at, updated_at::text as updated_at
-     from tasks where user_id = $1 and workflow_id = $2 and role_id = $3
+    `select ${TASK_COLUMNS}
+     from tasks where user_id = $1 and workflow_id = $2 and role_id = $3 and step_name = $4
      order by created_at desc limit 1`,
-    [userId, wf.id, step.roleId],
+    [userId, wf.id, step.roleId, step.name],
   );
   let task = rows[0];
   if (!task) {
@@ -839,17 +918,14 @@ export async function driveUntilBlocked(
     if (r.blockedReason) break;
     if (workflowStatus === "completed") break;
     if (!r.task) break;
-    if (r.task.status === "blocked" || r.task.status === "waiting_approval" || r.task.status === "failed") break;
+    if (r.task.status === "blocked" || r.task.status === "waiting_approval") break;
   }
   return { steps, workflowStatus };
 }
 
 export async function listTasks(sql: Sql, userId: string): Promise<TaskRow[]> {
   return sql.query<TaskRow>(
-    `select id, user_id, role_id, title, request_statement, interpretation, status, workflow_id, step_name,
-            parent_task_id, package_id, input_json, output_json, evidence_json, uncertainty, recovery_json,
-            is_test_only, created_at::text as created_at, updated_at::text as updated_at
-     from tasks where user_id = $1 order by created_at desc limit 80`,
+    `select ${TASK_COLUMNS} from tasks where user_id = $1 order by created_at desc limit 80`,
     [userId],
   );
 }

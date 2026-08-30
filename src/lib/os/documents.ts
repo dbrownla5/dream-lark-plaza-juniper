@@ -83,18 +83,47 @@ export async function ingestDocument(
     });
     if (llm.ok) {
       try {
-        const parsed = JSON.parse(llm.text.slice(llm.text.indexOf("{"), llm.text.lastIndexOf("}") + 1)) as {
-          classification?: string;
-          confidence?: number;
-          role_id?: number;
-          uncertain?: boolean;
-        };
-        cls = {
-          classification: parsed.classification ?? cls.classification,
-          confidence: parsed.confidence ?? cls.confidence,
-          review: Boolean(parsed.uncertain) || cls.review,
-          role: parsed.role_id ?? cls.role,
-        };
+        const parsed: unknown = JSON.parse(
+          llm.text.slice(llm.text.indexOf("{"), llm.text.lastIndexOf("}") + 1),
+        );
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          // Coerce each field; a value the model got wrong falls back to the
+          // local classification instead of crashing the insert into typed
+          // columns (real / integer). Uncoercible material routes to review.
+          const p = parsed as Record<string, unknown>;
+          const classification =
+            typeof p.classification === "string" && p.classification.trim()
+              ? p.classification.trim().toLowerCase()
+              : cls.classification;
+          const confidenceNum =
+            typeof p.confidence === "number"
+              ? p.confidence
+              : typeof p.confidence === "string"
+                ? Number.parseFloat(p.confidence)
+                : NaN;
+          const confidence =
+            Number.isFinite(confidenceNum) && confidenceNum >= 0 && confidenceNum <= 1
+              ? confidenceNum
+              : cls.confidence;
+          const roleNum =
+            typeof p.role_id === "number"
+              ? p.role_id
+              : typeof p.role_id === "string"
+                ? Number.parseInt(p.role_id, 10)
+                : NaN;
+          const role = Number.isInteger(roleNum) && roleNum >= 1 && roleNum <= 40 ? roleNum : cls.role;
+          const coercionFailed =
+            (p.confidence != null && confidence === cls.confidence && !Number.isFinite(confidenceNum)) ||
+            (p.role_id != null && role === cls.role && !Number.isInteger(roleNum));
+          cls = {
+            classification,
+            confidence,
+            review: Boolean(p.uncertain) || coercionFailed || cls.review,
+            role,
+          };
+        } else {
+          cls = { ...cls, review: true };
+        }
       } catch {
         cls = { ...cls, review: true };
       }
@@ -147,6 +176,7 @@ export async function ingestDocument(
     chainId,
     requestStatement: `Work this original. Document ${id}. Classification=${cls.classification}. Do not invent identity.`,
     subjectId: id,
+    subjectKind: "document",
     isTestOnly: opts.isTestOnly,
     packageId: pkg.id,
     input: {

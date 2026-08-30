@@ -11,29 +11,38 @@ export async function ensureWorkspace(sql: Sql, userId: string): Promise<{ works
   );
   let workspaceId = existing[0]?.id;
   if (!workspaceId) {
+    // Concurrent first-load requests race here; on_conflict keeps the winner.
     workspaceId = newId("ws");
-    await sql.query(`insert into workspaces (id, user_id) values ($1,$2)`, [workspaceId, userId]);
+    await sql.query(
+      `insert into workspaces (id, user_id) values ($1,$2) on conflict (user_id) do nothing`,
+      [workspaceId, userId],
+    );
+    const won = await sql.query<{ id: string }>(`select id from workspaces where user_id = $1`, [userId]);
+    workspaceId = won[0]?.id ?? workspaceId;
   }
-  const spend = await sql.query<{ user_id: string }>(`select user_id from spend_limits where user_id = $1`, [
-    userId,
-  ]);
-  if (!spend[0]) {
-    await sql.query(`insert into spend_limits (user_id, daily_cents) values ($1, 500)`, [userId]);
-  }
-  await seedSkills(sql);
+  await sql.query(
+    `insert into spend_limits (user_id, daily_cents) values ($1, 500) on conflict (user_id) do nothing`,
+    [userId],
+  );
+  await seedSkills(sql, userId);
   await writeHealth(sql, userId);
   return { workspaceId };
 }
 
-async function seedSkills(sql: Sql): Promise<void> {
+async function seedSkills(sql: Sql, userId: string): Promise<void> {
+  const seeded = await sql.query<{ n: number }>(
+    `select count(*)::int as n from skills where user_id = $1`,
+    [userId],
+  );
+  if ((seeded[0]?.n ?? 0) > 0) return;
   for (const role of ROLES) {
     for (const name of role.requiredSkills) {
-      const id = `skill_${role.id}_${slug(name)}`.slice(0, 120);
+      const id = newId("skill");
       await sql.query(
-        `insert into skills (id, role_id, name, status, evidence)
-         values ($1,$2,$3,'candidate','seeded from TAB 04 required skills')
-         on conflict (role_id, name) do nothing`,
-        [id, role.id, name],
+        `insert into skills (id, user_id, role_id, name, status, evidence)
+         values ($1,$2,$3,$4,'candidate','seeded from TAB 04 required skills')
+         on conflict (user_id, role_id, name) do nothing`,
+        [id, userId, role.id, name],
       );
     }
   }

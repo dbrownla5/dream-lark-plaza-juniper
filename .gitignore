@@ -3,3 +3,6 @@ node_modules/
 .github_repo
 .env
 .env.*
+
+# Preview database and blob storage are machine-local state, never committed
+data/

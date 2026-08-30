@@ -41,12 +41,12 @@ export async function runDeskVerify(
   add("chains_defined", WORKFLOW_CHAINS.length === 8, WORKFLOW_CHAINS.map((c) => c.id).join(","));
   add("llm", llmAvailable(), llmAvailable() ? LLM_MODEL : "UNAVAILABLE");
 
-  const skills = await qualifyMechanicalSkills(sql);
+  const skills = await qualifyMechanicalSkills(sql, userId);
   add("skills", skills.qualified > 0, `qualified ${skills.qualified}`);
 
   add("guard_delete", !assertActionAllowed(1, "DELETE").ok, "intake cannot delete");
   add("guard_circle", !detectCircularHandoff([7, 8, 7], 8).ok, "circle blocked");
-  add("guard_secret", containsSecret("XAI_API_KEY=abc"), "secrets detected");
+  add("guard_secret", containsSecret("XAI_API_KEY=abc") && containsSecret("GEMINI_API_KEY=abc"), "secrets detected");
   add("guard_sale", !assertProhibitedSpeech(32, "this is guaranteed to sell").ok, "listing cannot promise a sale");
 
   const stmt = await writeContext(sql, {
@@ -130,7 +130,11 @@ export async function runDeskVerify(
       const step = driven.steps[0];
       add(
         `chain_${started.id}_run`,
-        Boolean(step) && (step.status === "done" || step.status === "blocked" || step.status === "waiting_approval"),
+        Boolean(step) &&
+          (step.status === "done" ||
+            step.status === "handed_off" ||
+            step.status === "blocked" ||
+            step.status === "waiting_approval"),
         step ? `${step.roleId}:${step.status}${step.blockedReason ? ` ${step.blockedReason}` : ""}` : "no step",
       );
     }

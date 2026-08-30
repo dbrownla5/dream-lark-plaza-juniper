@@ -173,6 +173,8 @@ export async function retrieveForTask(
   },
 ): Promise<LivingRecord[]> {
   const limit = opts.limit ?? 40;
+  // Dayna's words, corrections, facts and decisions are shared context; other
+  // roles' raw inferences are not — each occupation sees only its own.
   return sql.query<LivingRecord>(
     `select ${SELECT} from living_context
      where user_id = $1
@@ -183,9 +185,10 @@ export async function retrieveForTask(
          or permissions in ('owner','role','public')
        )
        and ($2::text is null or project_id is null or project_id = $2)
+       and (kind <> 'agent_inference' or author = $3)
      order by case when source = 'voice_pillar' then 0 else 1 end, created_at desc
-     limit $3`,
-    [opts.userId, opts.projectId ?? null, limit],
+     limit $4`,
+    [opts.userId, opts.projectId ?? null, `role:${opts.roleId}`, limit],
   );
 }
 
