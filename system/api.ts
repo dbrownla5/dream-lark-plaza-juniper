@@ -5,7 +5,7 @@
 import { Router } from "express";
 import { getSql } from "./lib/db.ts";
 import { ROLES } from "./lib/roles.ts";
-import { WORKFLOW_CHAINS, classifyIntakeDomain } from "./lib/workflows.ts";
+import { WORKFLOW_CHAINS } from "./lib/workflows.ts";
 import { health } from "./lib/workspace.ts";
 import { ensureWorkspace, dailySpendCents, spendCeiling } from "./lib/workspace.ts";
 import {
@@ -20,6 +20,18 @@ import {
 import { listContext, writeContext } from "./lib/context.ts";
 import { runVerify } from "./lib/verify.ts";
 import { handleJsonRpc } from "./lib/mcp.ts";
+import busboy from "busboy";
+import {
+  preserveFile,
+  extractDocumentText,
+  createBatch,
+  listFiles,
+  listBatches,
+  getFile,
+} from "./lib/intake.ts";
+import { getObject, storageHealth } from "./lib/storage.ts";
+import { sendMessage, listMessages, listThreads, agentDirectory } from "./lib/chat.ts";
+import { correctContext } from "./lib/context.ts";
 
 const USER = "dayna";
 
@@ -102,7 +114,9 @@ api.post(
   }),
 );
 
-// Put work on a desk: routes to a chain by domain and starts it.
+// Dayna's words go in and are kept as hers. Nothing is started, because no
+// job has been built out yet. When a real job exists it gets offered here by
+// name — never a list of placeholder categories to pick from.
 api.post(
   "/intake",
   wrap(async (req, res) => {
@@ -113,16 +127,17 @@ api.post(
     }
     const sql = await getSql();
     await ensureWorkspace(sql, USER);
-    const chainId = req.body?.chainId ?? classifyIntakeDomain(statement).chainId;
-    const started = await startChain(sql, {
+    const record = await writeContext(sql, {
       userId: USER,
-      chainId,
-      requestStatement: statement,
-      subjectKind: "statement",
+      kind: "user_statement",
+      body: statement,
+      author: "dayna",
+      source: "intake",
     });
-    // Run the first occupation immediately so the desk answers now.
-    const driven = await driveWorkflow(sql, USER, started.workflowId);
-    res.json({ workflowId: started.workflowId, chainId, firstTask: driven.task, blockedReason: driven.blockedReason });
+    res.json({
+      contextId: record.id,
+      note: "Saved in your words. No job has been built to run this through yet, so nothing was started.",
+    });
   }),
 );
 
@@ -182,3 +197,234 @@ api.post(
     res.json(await handleJsonRpc(sql, USER, req.body));
   }),
 );
+
+
+// ---------------------------------------------------------------------------
+// Files. The part that did not exist before: Dayna puts something in, and it
+// is preserved before anything else is allowed to happen to it.
+// ---------------------------------------------------------------------------
+
+type UploadedPart = { name: string; mime: string; bytes: Buffer };
+
+function readMultipart(req: any): Promise<{ files: UploadedPart[]; fields: Record<string, string> }> {
+  return new Promise((resolve, reject) => {
+    const bb = busboy({
+      headers: req.headers,
+      limits: { fileSize: 60 * 1024 * 1024, files: 200 },
+    });
+    const files: UploadedPart[] = [];
+    const fields: Record<string, string> = {};
+    let truncated = false;
+
+    bb.on("field", (name: string, value: string) => {
+      fields[name] = value;
+    });
+    bb.on("file", (_field: string, stream: any, info: any) => {
+      const chunks: Buffer[] = [];
+      stream.on("data", (c: Buffer) => chunks.push(c));
+      stream.on("limit", () => {
+        truncated = true;
+      });
+      stream.on("end", () => {
+        if (!truncated && info.filename) {
+          files.push({
+            name: info.filename,
+            mime: info.mimeType || "application/octet-stream",
+            bytes: Buffer.concat(chunks),
+          });
+        }
+      });
+    });
+    bb.on("error", reject);
+    bb.on("close", () => {
+      if (truncated) {
+        reject(new Error("A file exceeded the 60MB limit and was NOT stored. Nothing was partially saved."));
+        return;
+      }
+      resolve({ files, fields });
+    });
+    req.pipe(bb);
+  });
+}
+
+api.post(
+  "/upload",
+  wrap(async (req, res) => {
+    const sql = await getSql();
+    await ensureWorkspace(sql, USER);
+    const { files, fields } = await readMultipart(req);
+    if (!files.length) {
+      res.status(400).json({ error: "No files arrived." });
+      return;
+    }
+
+    // The page Dayna dropped on decides the domain. There is no global router
+    // guessing what she meant.
+    const surface = String(fields.surface ?? "photos");
+    const label =
+      String(fields.label ?? "").trim() ||
+      `${surface === "documents" ? "Documents" : "Photos"} ${new Date().toLocaleString("en-US")}`;
+    const batch = await createBatch(sql, {
+      userId: USER,
+      label,
+      kind: surface === "documents" ? "document" : "photo",
+      note: String(fields.note ?? "") || undefined,
+    });
+
+    const preserved = [];
+    for (const f of files) {
+      const { file, duplicateOf, backend } = await preserveFile(sql, {
+        userId: USER,
+        batchId: batch.id,
+        originalName: f.name,
+        mime: f.mime,
+        bytes: f.bytes,
+      });
+      preserved.push({ file, duplicateOf, backend, bytes: f.bytes });
+    }
+
+    res.json({
+      batchId: batch.id,
+      label: batch.label,
+      preserved: preserved.map((p) => ({
+        ...p.file,
+        duplicateOf: p.duplicateOf,
+        backend: p.backend,
+      })),
+      note: "Originals are stored.",
+    });
+
+    // Text is read out of documents we can actually read — that is reading a
+    // file, not judging it. Photos are preserved and cataloged and nothing
+    // more: there is no built photo job yet, and a generic "describe this
+    // image" call is not one.
+    for (const p of preserved) {
+      if (p.file.status === "failed" || p.duplicateOf) continue;
+      if (p.file.kind !== "document") continue;
+      try {
+        await extractDocumentText(sql, USER, p.file, p.bytes);
+      } catch (err) {
+        await sql.query(
+          `update files set status = 'review', failure_reason = $2, updated_at = now() where id = $1`,
+          [p.file.id, err instanceof Error ? err.message : String(err)],
+        );
+      }
+    }
+  }),
+);
+
+api.get(
+  "/files",
+  wrap(async (req, res) => {
+    const sql = await getSql();
+    await ensureWorkspace(sql, USER);
+    const [files, batches, storage] = await Promise.all([
+      listFiles(sql, USER, {
+        kind: req.query.kind ? String(req.query.kind) : undefined,
+        batchId: req.query.batch ? String(req.query.batch) : undefined,
+      }),
+      listBatches(sql, USER),
+      storageHealth(),
+    ]);
+    res.json({ files, batches, storage });
+  }),
+);
+
+// The bytes themselves, so a photo on the Photos page is her actual photo.
+api.get(
+  "/files/:id/bytes",
+  wrap(async (req, res) => {
+    const sql = await getSql();
+    const file = await getFile(sql, USER, String(req.params.id));
+    if (!file || !file.uri) {
+      res.status(404).json({ error: "Not found." });
+      return;
+    }
+    const obj = await getObject(sql, file.uri, USER);
+    if (!obj) {
+      res.status(410).json({ error: "The original could not be read back from storage." });
+      return;
+    }
+    res.setHeader("Content-Type", obj.mime || file.mime);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.send(obj.bytes);
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Chat — the ordinary page, and each agent's own.
+// ---------------------------------------------------------------------------
+
+api.get("/agents", (_req, res) => {
+  res.json({ agents: agentDirectory() });
+});
+
+api.get(
+  "/threads",
+  wrap(async (_req, res) => {
+    const sql = await getSql();
+    await ensureWorkspace(sql, USER);
+    res.json({ threads: await listThreads(sql, USER) });
+  }),
+);
+
+api.get(
+  "/chat/:threadId",
+  wrap(async (req, res) => {
+    const sql = await getSql();
+    await ensureWorkspace(sql, USER);
+    res.json({ messages: await listMessages(sql, USER, String(req.params.threadId)) });
+  }),
+);
+
+api.post(
+  "/chat/:threadId",
+  wrap(async (req, res) => {
+    const body = String(req.body?.body ?? "").trim();
+    if (!body) {
+      res.status(400).json({ error: "Say something first." });
+      return;
+    }
+    const threadId = String(req.params.threadId);
+    const match = /^role:(\d+)$/.exec(threadId);
+    const roleId = match ? Number(match[1]) : null;
+    if (roleId !== null && (roleId < 1 || roleId > 40)) {
+      res.status(404).json({ error: "No such agent." });
+      return;
+    }
+    const sql = await getSql();
+    await ensureWorkspace(sql, USER);
+    res.json(await sendMessage(sql, { userId: USER, threadId, roleId, body }));
+  }),
+);
+
+// Dayna corrects the system. History is kept; the correction supersedes.
+api.post(
+  "/context/:id/correct",
+  wrap(async (req, res) => {
+    const body = String(req.body?.body ?? "").trim();
+    if (!body) {
+      res.status(400).json({ error: "A correction needs a body." });
+      return;
+    }
+    const sql = await getSql();
+    res.json(
+      await correctContext(sql, {
+        userId: USER,
+        supersedesId: String(req.params.id),
+        body,
+        author: "dayna",
+      }),
+    );
+  }),
+);
+
+api.get(
+  "/context",
+  wrap(async (_req, res) => {
+    const sql = await getSql();
+    await ensureWorkspace(sql, USER);
+    res.json({ context: await listContext(sql, USER, 120) });
+  }),
+);
+

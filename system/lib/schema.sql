@@ -154,3 +154,91 @@ create table if not exists usage_events (
   created_at timestamptz not null default now()
 );
 create index if not exists usage_events_user_idx on usage_events (user_id, created_at desc);
+
+-- ---------------------------------------------------------------------------
+-- Files. Everything below exists so that when Dayna drops something in, it is
+-- preserved before anything else happens to it, and stays traceable to what it
+-- came from. Originals are never mutated; derivatives point back.
+-- ---------------------------------------------------------------------------
+
+-- Durable bytes when no object store is configured. The object store is
+-- preferred (STORAGE_BUCKET_PREFIX); this table is the fallback so that
+-- "preserved" is never a promise the system cannot keep.
+create table if not exists file_blobs (
+  id text primary key,
+  user_id text not null,
+  bytes bytea not null,
+  byte_size integer not null,
+  mime text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists batches (
+  id text primary key,
+  user_id text not null,
+  label text not null,
+  kind text not null default 'photo', -- photo | document | mixed
+  note text,
+  workflow_id text,
+  created_at timestamptz not null default now()
+);
+create index if not exists batches_user_idx on batches (user_id, created_at desc);
+
+-- One row per file Dayna put in, image or document. `zone` is where the
+-- authoritative original lives; `uri` resolves through lib/storage.ts.
+create table if not exists files (
+  id text primary key,
+  user_id text not null,
+  batch_id text,
+  kind text not null,                    -- image | document | other
+  original_name text not null,
+  mime text not null,
+  byte_size integer not null,
+  checksum_sha256 text not null,
+  zone text not null default 'originals',
+  uri text not null,
+  working_name text,                     -- content-informed name; original_name never changes
+  status text not null default 'preserved',
+  -- preserved | analyzing | cataloged | review | failed
+  analysis_json text,
+  extracted_text text,
+  uncertainty text,
+  failure_reason text,
+  item_id text,
+  task_id text,
+  workflow_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists files_user_idx on files (user_id, created_at desc);
+create index if not exists files_batch_idx on files (user_id, batch_id);
+create index if not exists files_checksum_idx on files (user_id, checksum_sha256);
+
+-- Non-destructive derivatives always name their parent.
+create table if not exists derivatives (
+  id text primary key,
+  user_id text not null,
+  file_id text not null,
+  purpose text not null,                 -- thumbnail | listing | working_copy | export
+  zone text not null default 'derivatives',
+  uri text not null,
+  mime text,
+  byte_size integer,
+  created_at timestamptz not null default now()
+);
+create index if not exists derivatives_file_idx on derivatives (user_id, file_id);
+
+-- Chat that survives the page. thread_id is 'general' for the ordinary
+-- assistant, or 'role:<n>' for one occupation's own chat.
+create table if not exists chat_messages (
+  id text primary key,
+  user_id text not null,
+  thread_id text not null,
+  role_id integer,
+  author text not null,                  -- dayna | agent | system
+  body text not null,
+  blocked_reason text,
+  context_id text,
+  created_at timestamptz not null default now()
+);
+create index if not exists chat_thread_idx on chat_messages (user_id, thread_id, created_at);
