@@ -1,61 +1,46 @@
-# Dayna's MCP/LLM Operating System (the product)
+# Dayna's MCP/LLM operating system
 
-**START HERE: `system/` is the successor build** — Dayna's chosen simple
-stack (Express + Vite/React + Postgres + Gemini, one `.env`), rebuilt from
-the packet spec with the clean engine. The root TanStack app is the Grok-era
-reference implementation: keep it running as the source to port from
-(photo/document pipelines, storage zones), build new work in `system/`.
+**Read `.claude/skills/dayna-os/SKILL.md` before doing anything.** It carries the
+goal in Dayna's words, the rules for working with her, the live infrastructure, and
+an honest status of what is and is not built. This file is only a pointer.
 
-Read `packet/control_repo/dayna_build_control/README.md`, `contracts/`, and
-`LAST_HANDOFF.md` BEFORE working. Those documents are the source of truth for
-what this system is and how work is proven. Non-negotiables: evidence over
-claims, no mocks in production paths, remote/off-site production (never
-localhost-as-production), keep the 40 occupational roles distinct, never
-print or commit secrets, don't replace building with re-planning.
+One product, three repos: this one (the system), `cinder-rose-velvet-field` (Lotbook
+— photo intake / resale), `workflow-builder` (workflow engine). End state is one
+remote dashboard she logs into.
 
-This repo is ONE system with two sibling repos feeding it:
-`cinder-rose-velvet-field` (Lotbook — photo intake/resale domain) and
-`workflow-builder` (workflow engine domain). End state: one remote server
-dashboard ecosystem (see `attachments/Controlling_PlatformChange_Directive`).
-Cloudflare is dead. Vercel is out (no credits). Deploy targets: Netlify free
-tier or the `adapters/node-host/Dockerfile` on any container host; Supabase
-free tier for Postgres.
+Non-negotiables:
 
-## LLM provider (rebuilt off Grok's sandbox)
+- Her written directives are the spec. Not a summary of prior chats, not your own
+  description of what you built.
+- Never build on assumed access — ask what she actually has.
+- She does not use a terminal or the Google Cloud console. Never send her console or
+  CLI homework.
+- Evidence over claims. No mocks in production paths. Never localhost-as-production.
+- Keep the 40 occupational roles distinct.
+- Never print or commit secrets. `.env` is gitignored on purpose.
+- Don't replace building with re-planning, and don't defend a build she has rejected.
 
-Single client: `src/lib/os/llm.ts` — Gemini OpenAI-compatible endpoint.
-Env contract (server-only, NEVER committed; `.env` is gitignored on purpose):
-- `GEMINI_API_KEY` — the key (Dayna provides it; ask her, do not invent).
-- `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` — optional overrides so any
-  OpenAI-compatible provider (Groq, OpenRouter, xAI) drops in.
-- Default model `gemini-3.6-flash`; smoke tests use `gemini-flash-lite-latest`.
-- `DATABASE_URL` — optional; PGlite fallback self-migrates. `data/pglite/` is
-  machine-local state, never committed.
+**The directive documents currently in `packet/` and `attachments/` are broken
+uploads** — Dayna has said so. Do not treat them as the spec. She is uploading clean
+files; read those.
 
-## Agent runtime
+## Code layout
 
-`src/lib/os/runtime.ts` was REBUILT (Grok's original erased its own work).
-Invariants to preserve: every run exits through `recordRun` (durable
-agent_runs row + recovery point; provider/model only when a real call
-happened); failures salvage partial model output into evidence instead of
-discarding it; task statuses queued|running|waiting_approval|handed_off|
-blocked|done only; workflow cursor advances only from the current step's
-completing task; handoff side-tasks use `step_name` prefix `handoff:` and
-never move the chain; skills are per-user (`migrations/0005_skills_user.sql`).
+- `system/` — Express + Vite/React + Postgres + Gemini/Vertex, one `.env`. This is
+  what is deployed to Cloud Run.
+- root TanStack app — the older Grok-era implementation. Its `src/lib/os/photo.ts`,
+  `documents.ts` and `storage.ts` are the photo/document pipeline to port from; no
+  deployed server runs them today.
+- Model client: `system/lib/llm.ts` (Vertex when `VERTEX_PROJECT` is set, else the
+  Gemini key endpoint). Default model `gemini-3.6-flash`.
+- Runtime invariants in `system/lib/runtime.ts`: every run exits through `recordRun`;
+  failures salvage partial output into evidence; statuses are
+  queued|running|waiting_approval|handed_off|blocked|done; the workflow cursor
+  advances only from the current step's completing task; handoff side-tasks are
+  prefixed `handoff:` and never move the chain.
 
-## Going live (Dayna says "set up Google")
+## Verify
 
-When Dayna asks to set up Google / deploy / go live, on a machine where her
-browser can log in (her PC): run `system/gcp/setup.sh` end to end. Do NOT
-re-plan it, question it, or substitute another platform — it is the agreed
-path (Cloud Run + Cloud Storage + Cloud SQL on her startup credits). The only
-human step it contains is one Google sign-in click. If a step fails, fix and
-re-run (it is idempotent). Never ask her to navigate the Google Cloud console.
-
-## Verify (all proven green in a remote container, 2026-08-29)
-
-`npm run typecheck && npm run lint && npm test` (9 pre-existing scaffold
-test failures in grok-pwa/migration-plan are Grok's, not the app's),
-`npm run build`, dev on :8080 → `/api/health`, `scripts/browser-smoke.mjs`,
-`node scripts/live-smoke.mjs` (1 live call), and `/api/verify` = the full
-live acceptance surface (46 checks incl. all 8 chains on real Gemini).
+`npm run typecheck && npm run lint && npm test && npm run build`, then dev on :8080
+and `/api/health`. Deployed checks go against the live Cloud Run URL — container
+browsers cannot reach external URLs through the proxy, so use curl, not Playwright.
